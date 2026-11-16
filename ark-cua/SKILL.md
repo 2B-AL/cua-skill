@@ -19,6 +19,7 @@ Parse the single JSON object printed by each invocation:
 
 - Success: `ok: true`, with `data` and sometimes `next`.
 - Failure: `ok: false`, with `error.code` and sometimes `next.setup_command`.
+- Either can carry `notices`: one-off messages to relay to the user.
 
 Read [references/commands.md](references/commands.md) for non-core commands and before desktop start or shutdown. For login sync or credential resources, read [references/credentials.md](references/credentials.md) before acting. Use [references/auth.md](references/auth.md), [references/outcomes.md](references/outcomes.md), and [references/troubleshooting.md](references/troubleshooting.md) when needed.
 

@@ -47,7 +47,8 @@ class SkillError(Exception):
     REFRESH_FAILED, FORBIDDEN, DESKTOP_NOT_BOUND, INVOCATION_NOT_FOUND,
     INVOCATION_NOT_WAITING_INPUT, ACTIVE_RUN_CONFLICT, MODEL_TIMEOUT,
     DESKTOP_UNHEALTHY, SESSION_CLEANUP, UPSTREAM_FAILURE,
-    CUA_BACKEND_UNAVAILABLE, RATE_LIMITED, VALIDATION_ERROR, NETWORK, INTERNAL).
+    CUA_BACKEND_UNAVAILABLE, RATE_LIMITED, VALIDATION_ERROR, NETWORK, INTERNAL),
+    plus the local STATE_MIGRATION_FAILED.
     """
 
     def __init__(self, code, message, **extra):
@@ -55,6 +56,14 @@ class SkillError(Exception):
         self.code = code
         self.message = message
         self.extra = {k: v for k, v in extra.items() if v is not None}
+
+
+# One-off messages for the user; the envelope this process prints carries them.
+_NOTICES = []
+
+
+def add_notice(text):
+    _NOTICES.append(text)
 
 
 def emit_success(action, data=None):
@@ -179,6 +188,8 @@ def _is_active_run_conflict(body):
 
 
 def _print(payload):
+    if _NOTICES:
+        payload = {**payload, "notices": list(_NOTICES)}
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 

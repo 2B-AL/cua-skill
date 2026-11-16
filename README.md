@@ -57,10 +57,13 @@ only to its gateway; `arkcli` credentials are used only for the bundled
 AgentPlan gateway. See [authentication](ark-cua/references/auth.md) for account
 switching and gateway selection.
 
-The rename preserves `~/.openclaw/ark-cua/`, including `auth.json` and
-`session.json`. Both `AP_CUA_SKILL_*` and `CUA_SKILL_*` overrides remain
-supported for the API base URL, auth file and session file. One login is saved
-per auth file; logging in to another gateway replaces that login.
+The login and session are kept in `~/.ark-cua/` (`auth.json` and
+`session.json`). Releases before 1.3.2 used `~/.openclaw/ark-cua/`; the first
+run of this version moves those two files and leaves everything else under
+`~/.openclaw` alone. Both `AP_CUA_SKILL_*` and `CUA_SKILL_*` overrides remain
+supported for the API base URL, auth file and session file; with an auth or
+session file override set, nothing is moved. One login is saved per auth file;
+logging in to another gateway replaces that login.
 
 Available operations depend on the selected gateway's capabilities and
 authorization. Non-browser Credential Agent resource synchronization retains

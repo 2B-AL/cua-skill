@@ -39,6 +39,11 @@ If `real_name_verification.status` is `unverified` or an operation returns `VOLC
 | `FORBIDDEN` | Report missing permission; do not retry the same operation with the same key. |
 | `VOLCENGINE_REAL_NAME_REQUIRED` | Follow the verification steps above without replacing a valid login. |
 | `VOLCENGINE_REAL_NAME_CHECK_UNAVAILABLE` | Report the temporary failure; check status before retrying an allocation so a desktop or task is not created twice. |
+| `STATE_MIGRATION_FAILED` | Relay `error.message`. The saved login could not move to `~/.ark-cua` and nothing was logged out; every command stops here until the user fixes the cause it names, such as permissions or a full disk. |
+
+## Saved state
+
+The login is kept in `~/.ark-cua/auth.json` and the session in `~/.ark-cua/session.json`: 0600 files in a 0700 directory. `AP_CUA_SKILL_AUTH_FILE` or `CUA_SKILL_AUTH_FILE` and `AP_CUA_SKILL_SESSION_FILE` or `CUA_SKILL_SESSION_FILE` name other files. Releases before 1.3.2 used `~/.openclaw/ark-cua`. With none of these variables set, the first run moves those two files and nothing else. When both directories hold state, `~/.ark-cua` is used and a one-time notice says the old directory was left unchanged.
 
 ## Logout
 
