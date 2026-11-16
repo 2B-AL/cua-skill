@@ -35,7 +35,7 @@ Read [references/commands.md](references/commands.md) for non-core commands and 
    - `failed`: report the failure; retry only when requested and safe.
    - `cancelled`: report cancellation.
 
-If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. Stop, tell the user the desktop is busy, and do not retry or inspect the existing task unless the user explicitly asks.
+If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. When the holder is this agent's own MCP session on that desktop ([references/mcp.md](references/mcp.md)), end it with `environment_release` and submit the request again. Otherwise stop, tell the user the desktop is busy, and do not retry or inspect the existing task unless the user explicitly asks.
 
 ## Route special intents
 

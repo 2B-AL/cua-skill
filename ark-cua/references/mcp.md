@@ -4,16 +4,16 @@ CUA serves the desktop's tools to MCP clients, so an agent can operate the deskt
 
 ## Connect a client
 
-`auth status` names the gateway this Skill uses in `data.gateway`; the endpoint and key depend on it:
+`auth status` names the gateway this Skill uses in `data.gateway`; without a login, the bundled gateway is `api_base_url` in [assets/config.json](../assets/config.json). The endpoint and key depend on the gateway:
 
 - **Bundled AgentPlan gateway** (`bundled: true`): the endpoint is `<url>/mcp`, and the key is the user's AgentPlan API key, the one this Skill logs in with.
 - **Another deployment** (`bundled: false`, such as a development environment): its operator provides the endpoint and issues account API keys. Do not derive the endpoint from `url`, because such a deployment may serve MCP on another origin. An environment token, which development logins of this Skill often use, gets 401 `invalid_token`.
 
-The client sends `Authorization: Bearer <key>` over Streamable HTTP. A 404 or 405 at `/mcp` means that deployment has not enabled the endpoint. The endpoint refuses credentials in the URL.
+The client sends `Authorization: Bearer <key>` over Streamable HTTP. A 404 or 405 at `/mcp` means that deployment has not enabled the endpoint. The endpoint refuses any query string (400 `invalid_request`), so the key never goes in the URL.
 
-The user gives the key to the client. Do not ask for it in chat or copy it from this Skill's saved login, because both expose it outside the client. Configure the client to read it from an environment variable that the user sets in their own terminal, for example `read -rs ARK_CUA_MCP_KEY && export ARK_CUA_MCP_KEY`, which also keeps it out of shell history.
+The user gives the key to the client. Do not ask for it in chat or copy it from this Skill's saved login, because both expose it outside the client. Configure the client to read it from an environment variable that the user sets in their own terminal, for example `read -rs ARK_CUA_MCP_KEY && export ARK_CUA_MCP_KEY`, which also keeps it out of shell history. The variable must be set wherever the client runs.
 
-Claude Code expands the single-quoted variable each time it connects:
+Claude Code expands the single-quoted variable each time it connects; `-s user` makes the server available in every project instead of only the current one:
 
 ```bash
 claude mcp add --transport http ark-cua '<endpoint>' --header 'Authorization: Bearer ${ARK_CUA_MCP_KEY}'
