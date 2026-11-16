@@ -1,6 +1,6 @@
 ---
 name: ark-cua
-description: Delegate web and desktop tasks to Volcengine AgentPlan CUA. Supports files, reusable tasks, desktop access and lifecycle, browser login sync with CookieCloud, named credential resources with Credential Agent, and connecting an MCP client so the user's own agent can call desktop tools directly. Prefer local reasoning or purpose-built local/API tools when they can complete the request directly.
+description: Do things on the user's cloud computer (云电脑 / 云桌面 / cloud desktop), the remote desktop of Volcengine AgentPlan CUA (Computer Use Agent) — use apps and websites there, read its screen, run commands, bring files back, and check that it is available. Use this skill whenever the user asks to operate, control or use the cloud computer or CUA, however they phrase it, even when a local tool could do the same; tools that control the user's own computer act on a different machine. It also covers desktop access links, start and shutdown, browser login sync with CookieCloud, credential resources with Credential Agent, and connecting an MCP client so the user's own agent can call desktop tools directly. For a request that names neither the cloud computer nor CUA, prefer local reasoning or purpose-built local/API tools that can complete it directly.
 version: 1.3.2
 license: Apache-2.0
 ---
