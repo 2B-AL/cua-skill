@@ -18,20 +18,29 @@ Login reuses an existing eligible AgentPlan account. If login is required, the u
 ## Core delegation
 
 ```bash
-python3 scripts/cua.py delegate --objective "<user request>" [--wait-ms 0]
+python3 scripts/cua.py delegate [--wait-ms 20000] --objective - <<'EOF'
+<user request>
+EOF
 python3 scripts/cua.py watch (--invocation-id <id> | --last) [--wait-ms 20000]
-python3 scripts/cua.py answer (--invocation-id <id> | --last) --answer "<reply>"
+python3 scripts/cua.py answer (--invocation-id <id> | --last) --answer - <<'EOF'
+<user reply>
+EOF
 python3 scripts/cua.py result (--invocation-id <id> | --last) [--timeout 600]
 python3 scripts/cua.py cancel (--invocation-id <id> | --last)
 ```
 
-Call `delegate` once and follow `next.command` until a terminal outcome. Use `cancel` only on explicit user request.
+`--objective`, `--answer` and `--text` read standard input when given `-`; in a quoted heredoc (`<<'EOF'`) the shell passes the user's words unchanged, quotation marks included. A task id and an invocation id are the same id, so `--task-id` and `--invocation-id` are interchangeable.
 
-## Desktop inspection, start/recovery, shutdown, and CUA App access
+Call `delegate` once and follow `next.command` until a terminal outcome. `delegate`, `task run`, `task continue`, `answer` and `task answer` wait up to 20 seconds for a terminal outcome by default, so a short task returns its result at once; `--wait-ms 0` returns the task id immediately. Use `cancel` only on explicit user request.
+
+Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `task continue --task-id <id>` for an earlier one.
+
+## Desktop inspection, screenshots, start/recovery, shutdown, and CUA App access
 
 ```bash
 python3 scripts/cua.py desktop list
 python3 scripts/cua.py desktop access [--desktop <id>]
+python3 scripts/cua.py desktop screenshot [--desktop <id>] [--output <new-path>]
 python3 scripts/cua.py desktop revoke-access (--ticket <ticket> | --access-url <url>)
 python3 scripts/cua.py desktop start --idempotency-key <stable-unique-key> \
   [--desktop <id>]
@@ -45,6 +54,8 @@ python3 scripts/cua.py model get
 
 `desktop start` starts or recovers a desktop and reactivates billing, so it also requires an explicit request. Pass the exact `--desktop` id to recover a particular desktop; omit it only when the user accepts service selection or a new desktop. If that exact desktop is expired or unavailable, ask before creating a replacement. Reuse the same idempotency key for retries and follow `next.command` until the operation succeeds. Use `data.action`, `data.restoring` and `data.newly_allocated` to explain whether the desktop was reused, recovered or newly created.
 
+`desktop screenshot` saves what the desktop shows now as an image and runs no CUA task; like `artifact save`, it never overwrites a path and, without `--output`, writes a temporary file. Like `desktop access`, it allocates a desktop when the login has none.
+
 `desktop access` returns a fresh temporary URL. Pass `--desktop <id>` for an exact owned desktop. Return `full_interface_url`, falling back to `access_url`, without changing the URL. Revoke a URL that may have leaked or is no longer needed.
 
 If opening the URL fails, follow [troubleshooting.md](troubleshooting.md).
@@ -54,13 +65,19 @@ The Skill intentionally excludes reboot/reset and persistent model modification.
 ## Tasks and reusable contexts
 
 ```bash
-python3 scripts/cua.py task run --objective "<user request>" \
-  [--desktop <id-or-name>] [--title "<title>"] [--wait-ms 0]
-python3 scripts/cua.py task continue (--context-id <id> | --last-context) \
-  --objective "<user request>" [--wait-ms 0]
+python3 scripts/cua.py task run [--desktop <id-or-name>] [--title "<title>"] [--wait-ms 20000] \
+  --objective - <<'EOF'
+<user request>
+EOF
+python3 scripts/cua.py task continue (--context-id <id> | --last-context | --task-id <id>) [--wait-ms 20000] \
+  --objective - <<'EOF'
+<user request>
+EOF
 python3 scripts/cua.py task status (--task-id <id> | --last)
 python3 scripts/cua.py task result (--task-id <id> | --last) [--timeout 600]
-python3 scripts/cua.py task answer (--task-id <id> | --last) --answer "<reply>"
+python3 scripts/cua.py task answer (--task-id <id> | --last) --answer - <<'EOF'
+<user reply>
+EOF
 python3 scripts/cua.py task cancel (--task-id <id> | --last)
 
 python3 scripts/cua.py context list

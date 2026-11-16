@@ -60,10 +60,21 @@ class SkillError(Exception):
 
 # One-off messages for the user; the envelope this process prints carries them.
 _NOTICES = []
+# The gateway this command uses and where its address came from.
+_GATEWAY = {}
 
 
 def add_notice(text):
     _NOTICES.append(text)
+
+
+def note_gateway(url, source):
+    _GATEWAY.clear()
+    _GATEWAY.update(url=url, source=source)
+
+
+def gateway_in_use():
+    return dict(_GATEWAY)
 
 
 def emit_success(action, data=None):
@@ -82,6 +93,8 @@ def emit_error(action, error):
         body.update(error.extra)
     else:
         body = {"code": "INTERNAL", "message": str(error)}
+    if body.get("code") == "NETWORK" and _GATEWAY:
+        body["gateway"] = dict(_GATEWAY)
     payload = {"ok": False, "action": action, "error": body}
     next_hint = _next_for_error(body)
     if next_hint:
@@ -164,6 +177,15 @@ def _next_for_error(body):
         return {
             "agent_hint": "Do not retry blindly. Report error.reason, error.request_id, and any safe context "
             "so the owning service can diagnose the failure.",
+        }
+    if code == "NETWORK":
+        # Without the address's source an agent once printed the environment to find it.
+        return {
+            "agent_hint": "The CUA gateway in error.gateway did not answer; error.gateway.source says where its "
+            "address came from. A task created before keeps running, so re-run the same watch, status or result "
+            "command once. If the gateway still does not answer, tell the user it is unreachable and where its "
+            "address comes from. Never print environment variables or credential files to diagnose it: they can "
+            "hold API keys.",
         }
     if code in RETRYABLE_ERROR_CODES:
         return {

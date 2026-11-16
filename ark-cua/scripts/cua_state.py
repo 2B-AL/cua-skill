@@ -16,8 +16,10 @@
 
 `AuthState` stores the API base URL, user identity, and AgentPlan API key in
 a 0600 file at ~/.ark-cua/auth.json (override with AP_CUA_SKILL_AUTH_FILE or
-CUA_SKILL_AUTH_FILE). `SessionState` remembers the last invocation id so weak
-agents can run `watch --last`; its file sits beside auth.json unless
+CUA_SKILL_AUTH_FILE). `SessionState` remembers the latest task, context and
+artifact ids so agents can pass `--last`, and the creation request of each
+unfinished task, user objective included, so that the request can be sent
+again (see `remember_submission`); its file sits beside auth.json unless
 AP_CUA_SKILL_SESSION_FILE or CUA_SKILL_SESSION_FILE names another one.
 Permissions are repaired automatically (0700 for ~/.ark-cua, 0600 for the
 files); if repair fails the CLI refuses to continue so credentials are never
@@ -51,6 +53,7 @@ STATE_FILES = ("auth.json", "session.json")
 _OVERRIDES = ("AP_CUA_SKILL_AUTH_FILE", "CUA_SKILL_AUTH_FILE",
               "AP_CUA_SKILL_SESSION_FILE", "CUA_SKILL_SESSION_FILE")
 _LEGACY_NOTICE_MARKER = ".legacy-state-noticed"
+SUBMISSIONS_KEPT = 20
 
 
 def _credential_state_key(environment_id, *parts):
@@ -300,12 +303,6 @@ class SessionState(_JsonFile):
     def last_invocation_id(self):
         return self.data.get("last_invocation_id")
 
-    def set_last_invocation_id(self, invocation_id):
-        if not invocation_id:
-            return
-        self.data["last_invocation_id"] = invocation_id
-        self.save()
-
     # The semantic command surface (task/context/artifact) remembers the
     # most recent id of each kind so weak agents can use `--last-*` instead of
     # threading ids through every call.
@@ -332,6 +329,36 @@ class SessionState(_JsonFile):
                 changed = True
         if changed:
             self.save()
+
+    # The creation request (path and body, idempotency key included) of each
+    # unfinished task and when it was last sent again (0 = not yet). Sending it
+    # again makes the gateway authorize the model anew and resume the same Run
+    # after CUA lost model authorization. An entry is removed when the task
+    # ends; only the newest few are kept.
+    def remember_submission(self, task_id, path, body, sent_at=0.0):
+        if not task_id:
+            return
+        records = self._submissions()
+        records.pop(task_id, None)
+        records[task_id] = {"path": path, "body": body, "sent_at": sent_at}
+        self.data["submissions"] = dict(list(records.items())[-SUBMISSIONS_KEPT:])
+        self.save()
+
+    def submission(self, task_id):
+        record = self._submissions().get(task_id)
+        if isinstance(record, dict) and isinstance(record.get("path"), str) and isinstance(record.get("body"), dict):
+            return record
+        return None
+
+    def forget_submission(self, task_id):
+        records = self._submissions()
+        if records.pop(task_id, None) is not None:
+            self.data["submissions"] = records
+            self.save()
+
+    def _submissions(self):
+        records = self.data.get("submissions")
+        return dict(records) if isinstance(records, dict) else {}
 
     # The id of the browser sync connection this computer last wrote into its
     # CookieCloud extension, per Gateway. The id is not a secret; the

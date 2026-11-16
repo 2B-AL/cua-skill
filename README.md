@@ -1,8 +1,10 @@
 # ARK CUA
 
-This repository publishes the **ark-cua** skill for delegating web and desktop
-tasks to CUA. The repository is `2B-AL/cua-skill`; the skill directory and name
-are both `ark-cua`.
+This repository publishes the **ark-cua** skill, which lets a coding agent such
+as Claude Code or Codex do work on the user's cloud computer through Volcengine
+AgentPlan CUA: delegate tasks and follow-ups, take screenshots, bring files
+back, and manage desktop access. The repository is `2B-AL/cua-skill`; the skill
+directory and name are both `ark-cua`.
 
 ## Install or update
 
@@ -63,7 +65,10 @@ run of this version moves those two files and leaves everything else under
 `~/.openclaw` alone. Both `AP_CUA_SKILL_*` and `CUA_SKILL_*` overrides remain
 supported for the API base URL, auth file and session file; with an auth or
 session file override set, nothing is moved. One login is saved per auth file;
-logging in to another gateway replaces that login.
+logging in to another gateway replaces that login. `session.json` also keeps
+the creation request of each unfinished task, objective included, so that a
+task can be resumed after CUA loses model authorization; the entry is removed
+when the task ends.
 
 Available operations depend on the selected gateway's capabilities and
 authorization. Non-browser Credential Agent resource synchronization retains

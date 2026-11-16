@@ -89,7 +89,8 @@ def authorized_call(state, base_url, method, path, body=None, query=None, timeou
     """Call a business endpoint with AgentPlan bearer auth and optional retry.
 
     `retries` should only be > 0 for idempotent calls (GET, or watch/observe/ping
-    which are safe to repeat). Never retry delegate/answer — they create state.
+    which are safe to repeat, or a task creation that carries an idempotency
+    key). Never retry an unkeyed creation or an answer — they create state.
     """
     attempt = 0
     while True:

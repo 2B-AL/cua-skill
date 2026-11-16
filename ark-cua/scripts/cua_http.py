@@ -18,6 +18,7 @@ Stdlib only (urllib). Parses the gateway's unified `{ ok, data | error }`
 envelope and converts errors into SkillError with the gateway error code.
 """
 
+import http.client
 import json
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -65,6 +66,10 @@ def request(method, base_url, path, token=None, body=None, query=None, timeout=D
         raise SkillError("NETWORK", f"Cannot reach CUA gateway at {base_url}: {exc.reason}")
     except TimeoutError:
         raise SkillError("NETWORK", f"Request to {url} timed out")
+    except (http.client.HTTPException, ConnectionError) as exc:
+        # urllib wraps only send errors in URLError; a connection dropped while
+        # the response is awaited or read (RemoteDisconnected, resets) lands here.
+        raise SkillError("NETWORK", f"The connection to the CUA gateway at {base_url} dropped: {exc}")
 
 
 def raw_request(method, base_url, path, token=None, body=None, query=None, timeout=DEFAULT_TIMEOUT_SEC):
@@ -105,6 +110,10 @@ def raw_request(method, base_url, path, token=None, body=None, query=None, timeo
         raise SkillError("NETWORK", f"Cannot reach CUA gateway at {base_url}: {exc.reason}")
     except TimeoutError:
         raise SkillError("NETWORK", f"Request to {url} timed out")
+    except (http.client.HTTPException, ConnectionError) as exc:
+        # urllib wraps only send errors in URLError; a connection dropped while
+        # the response is awaited or read (RemoteDisconnected, resets) lands here.
+        raise SkillError("NETWORK", f"The connection to the CUA gateway at {base_url} dropped: {exc}")
 
 
 def gateway_call(method, base_url, path, token=None, body=None, query=None, timeout=DEFAULT_TIMEOUT_SEC):
