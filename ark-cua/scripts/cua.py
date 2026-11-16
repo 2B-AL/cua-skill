@@ -63,6 +63,9 @@ DEFAULT_WATCH_WAIT_MS = 20000
 RESULT_POLL_WAIT_MS = 20000
 SERVER_WAIT_CHUNK_MS = 60000
 IDEMPOTENT_RETRIES = 2
+# A task waiting for model authorization gets its creation request again at
+# most this often, however often it is checked.
+MODEL_AUTHORIZATION_RETRY_SECONDS = 30
 CREDENTIAL_TARGET_PROTOCOL = "cua-target/v1"
 CREDENTIAL_RUNTIME = Path(__file__).resolve().parents[1]
 CREDENTIAL_PAIR_POLL_INTERVAL_SEC = 0.5
@@ -180,6 +183,7 @@ def main(argv=None):
                 "A command and subcommand are required.",
                 usage=parser.format_usage().strip(),
             )
+        _read_stdin_text(args)
         state = AuthState.load()
         session = SessionState.load()
         data = args.handler(args, state, session)
@@ -194,6 +198,29 @@ def main(argv=None):
         raise
     except Exception as exc:  # noqa: BLE001 - surface unexpected errors as JSON, not tracebacks
         emit_error(action, SkillError("INTERNAL", str(exc)))
+
+
+def _read_stdin_text(args):
+    """Replace an --objective, --answer or --text of - with standard input.
+
+    A quoted heredoc (<<'EOF') passes the user's words through the shell
+    unchanged, whatever quotation marks they contain.
+    """
+    for attr in ("objective", "answer", "text"):
+        if getattr(args, attr, None) != "-":
+            continue
+        flag = "--" + attr
+        try:
+            value = sys.stdin.buffer.read().decode("utf-8").strip()
+        except UnicodeDecodeError:
+            raise SkillError("VALIDATION_ERROR", f"{flag} - needs UTF-8 text on standard input.")
+        if not value:
+            raise SkillError(
+                "VALIDATION_ERROR",
+                f"{flag} - read nothing from standard input. Pass the text in a quoted heredoc: "
+                f"{flag} - <<'EOF' (the text on the next lines, then a line with EOF).",
+            )
+        setattr(args, attr, value)
 
 
 # -- base URL --------------------------------------------------------------
@@ -294,11 +321,9 @@ def cmd_delegate(args, state, session):
     # task submission. /v1/tasks, unlike /v1/invocations, also opens a reusable
     # context, so a follow-up can go to it with `task continue --last-context`.
     body = {"objective": args.objective, "wait_ms": 0}
-    envelope = cua_auth.authorized_call(
-        state, base_url, "POST", "/v1/tasks", body=body, timeout=_call_timeout(0)
-    )
+    envelope = _create_task(state, base_url, "/v1/tasks", body, session)
     envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, initial_envelope=envelope
+        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
     )
     return _envelope_result("delegate", envelope, session)
 
@@ -306,7 +331,7 @@ def cmd_delegate(args, state, session):
 def cmd_watch(args, state, session):
     base_url = resolve_base_url(args, state)
     invocation_id = _resolve_invocation_id(args, session)
-    envelope = _wait_invocation_with_budget(state, base_url, invocation_id, args.wait_ms)
+    envelope = _wait_invocation_with_budget(state, base_url, invocation_id, args.wait_ms, session)
     return _envelope_result("watch", envelope, session)
 
 
@@ -320,7 +345,7 @@ def cmd_answer(args, state, session):
         body=body, timeout=_call_timeout(0)
     )
     envelope = _wait_invocation_with_budget(
-        state, base_url, invocation_id, args.wait_ms, initial_envelope=envelope
+        state, base_url, invocation_id, args.wait_ms, session, initial_envelope=envelope
     )
     return _envelope_result("answer", envelope, session)
 
@@ -345,6 +370,7 @@ def cmd_result(args, state, session):
                 envelope = cua_auth.authorized_call(
                     state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
                 )
+            envelope = _recover_model_authorization(state, base_url, envelope, session)
             if envelope.get("outcome") != "in_progress":
                 break
             envelope = cua_auth.authorized_call(
@@ -563,11 +589,9 @@ def cmd_task_run(args, state, session):
         body["desktop"] = args.desktop
     if args.title:
         body["title"] = args.title
-    envelope = cua_auth.authorized_call(
-        state, base_url, "POST", "/v1/tasks", body=body, timeout=_call_timeout(0)
-    )
+    envelope = _create_task(state, base_url, "/v1/tasks", body, session)
     envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, initial_envelope=envelope
+        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
     )
     return _task_result("task run", envelope, session)
 
@@ -575,13 +599,14 @@ def cmd_task_run(args, state, session):
 def cmd_task_continue(args, state, session):
     base_url = resolve_base_url(args, state)
     _validate_wait_ms(args.wait_ms)
-    context_id = _resolve_context_id(args, session)
+    if args.task_id and not (args.context_id or args.last_context):
+        context_id = _context_of_task(state, base_url, args.task_id)
+    else:
+        context_id = _resolve_context_id(args, session)
     body = {"objective": args.objective, "wait_ms": 0}
-    envelope = cua_auth.authorized_call(
-        state, base_url, "POST", f"/v1/contexts/{context_id}/tasks", body=body, timeout=_call_timeout(0)
-    )
+    envelope = _create_task(state, base_url, f"/v1/contexts/{context_id}/tasks", body, session)
     envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, initial_envelope=envelope
+        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
     )
     return _task_result("task continue", envelope, session)
 
@@ -592,6 +617,7 @@ def cmd_task_status(args, state, session):
     envelope = cua_auth.authorized_call(
         state, base_url, "GET", f"/v1/tasks/{task_id}", retries=IDEMPOTENT_RETRIES
     )
+    envelope = _recover_model_authorization(state, base_url, envelope, session)
     return _task_result("task status", envelope, session)
 
 
@@ -605,6 +631,7 @@ def cmd_task_result(args, state, session):
             envelope = cua_auth.authorized_call(
                 state, base_url, "GET", f"/v1/tasks/{task_id}/result", retries=IDEMPOTENT_RETRIES
             )
+            envelope = _recover_model_authorization(state, base_url, envelope, session)
             if envelope.get("outcome") != "in_progress":
                 break
             time.sleep(3)
@@ -629,7 +656,7 @@ def cmd_task_answer(args, state, session):
         state, base_url, "POST", f"/v1/tasks/{task_id}/answer", body=body, timeout=_call_timeout(0)
     )
     envelope = _wait_invocation_with_budget(
-        state, base_url, task_id, args.wait_ms, initial_envelope=envelope
+        state, base_url, task_id, args.wait_ms, session, initial_envelope=envelope
     )
     return _task_result("task answer", envelope, session)
 
@@ -661,7 +688,7 @@ def cmd_context_create(args, state, session):
     if context_id:
         session.set_last(last_context_id=context_id)
     return {"data": data, "next": {
-        "command": f"{command_prefix()} task continue --context-id {context_id} --objective \"<TASK>\"",
+        "command": f"{command_prefix()} task continue --context-id {context_id} --objective - <<'EOF'\n<USER_REQUEST>\nEOF",
         "agent_hint": "Context created. Add background with context add-note, or start work with task continue.",
     }}
 
@@ -699,12 +726,27 @@ def cmd_artifact_list(args, state, session):
     data = cua_auth.authorized_call(
         state, base_url, "GET", f"/v1/tasks/{task_id}/artifacts", retries=IDEMPOTENT_RETRIES
     )
-    return {"data": data}
+    artifacts = [item for item in data.get("artifacts") or [] if isinstance(item, dict) and item.get("id")]
+    if not artifacts:
+        return {"data": data}
+    # The gateway's hint points at content_url; through this CLI, files are saved with artifact save.
+    data.pop("agent_hint", None)
+    return {"data": data, "next": {
+        "command": f"{command_prefix()} artifact save --task-id {task_id} --artifact-id {artifacts[0]['id']} --output <new-path>",
+        "agent_hint": "Save each file the user wants with artifact save, one --artifact-id at a time. "
+        "It writes a new file and never overwrites; omit --output for a temporary file.",
+    }}
 
 
 def cmd_artifact_save(args, state, session):
     base_url = resolve_base_url(args, state)
     artifact_id = args.artifact_id or (session.last_artifact_id if args.last else None)
+    if not artifact_id and args.last:
+        raise SkillError(
+            "VALIDATION_ERROR",
+            "No artifact has been saved on this computer yet, so --last has nothing to use. "
+            "Pass --artifact-id <id> from `artifact list`.",
+        )
     if not artifact_id:
         raise SkillError("VALIDATION_ERROR", "artifact_id is required. Pass --artifact-id <id> or --last.")
     task_id = args.task_id or session.last_task_id
@@ -1740,8 +1782,20 @@ def _resolve_context_id(args, session):
         )
     raise SkillError(
         "VALIDATION_ERROR",
-        "context_id is required. Pass --context-id <id> or --last-context.",
+        "context_id is required. Pass --context-id <id>, --last-context, or --task-id of the earlier task.",
     )
+
+
+def _context_of_task(state, base_url, task_id):
+    """The context an earlier task ran in, so that a follow-up can name the task."""
+    envelope = cua_auth.authorized_call(state, base_url, "GET", f"/v1/tasks/{task_id}", retries=IDEMPOTENT_RETRIES)
+    context_id = (envelope.get("platform") or {}).get("context_id")
+    if not context_id:
+        raise SkillError(
+            "VALIDATION_ERROR",
+            f"Task {task_id} has no context to continue. Pass --context-id <id>, or delegate the request as a new task.",
+        )
+    return context_id
 
 
 def _remember_task(envelope, session):
@@ -1757,12 +1811,14 @@ def _remember_task(envelope, session):
         last_invocation_id=task_id,
         last_context_id=context_id,
     )
+    if envelope.get("outcome") in ("completed", "failed", "cancelled"):
+        session.forget_submission(task_id)
 
 
 def _task_result(action, envelope, session):
     """Persist task/context ids from an envelope, then return data + task-flavored next."""
     _remember_task(envelope, session)
-    return {"data": envelope, "next": _next_for_task(envelope)}
+    return {"data": envelope, "next": _model_authorization_next(_next_for_task(envelope), envelope, session)}
 
 
 def _next_for_task(envelope):
@@ -1780,7 +1836,7 @@ def _next_for_task(envelope):
         }
     if outcome == "needs_input":
         return {
-            "command": f'{command} task answer --task-id {task_id} --answer "<USER_ANSWER>"',
+            "command": f"{command} task answer --task-id {task_id} --answer - <<'EOF'\n<USER_ANSWER>\nEOF",
             "agent_hint": hint or "Relay input_request.question to the user verbatim, "
             "then submit their reply with task answer.",
         }
@@ -1863,7 +1919,7 @@ def _call_timeout(wait_ms):
     return int(wait_ms / 1000.0) + 30
 
 
-def _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, initial_envelope=None):
+def _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, session, initial_envelope=None):
     """Wait for one invocation using a total client budget and <=60s server calls."""
     if wait_ms is None:
         wait_ms = DEFAULT_WATCH_WAIT_MS
@@ -1875,9 +1931,10 @@ def _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, initia
     if wait_ms == 0:
         if initial_envelope is not None:
             return initial_envelope
-        return cua_auth.authorized_call(
+        envelope = cua_auth.authorized_call(
             state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
         )
+        return _recover_model_authorization(state, base_url, envelope, session)
 
     remaining_ms = wait_ms
     envelope = initial_envelope
@@ -1892,6 +1949,7 @@ def _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, initia
             timeout=_call_timeout(chunk_ms),
             retries=IDEMPOTENT_RETRIES,
         )
+        envelope = _recover_model_authorization(state, base_url, envelope, session)
         if envelope.get("outcome") != "in_progress":
             return envelope
         remaining_ms -= chunk_ms
@@ -1903,9 +1961,73 @@ def _validate_wait_ms(wait_ms):
         raise SkillError("VALIDATION_ERROR", "--wait-ms must be >= 0")
 
 
+def _create_task(state, base_url, path, body, session):
+    """POST a new task under a fresh idempotency key and keep the request.
+
+    With the key, the gateway answers a repeated request with the same task:
+    a lost response is retried here without creating a second one, and
+    sending the request again resumes a task after CUA lost model
+    authorization (see _recover_model_authorization). A runtime without keyed
+    creation rejects the key with TaskIdempotencyUnavailable before accepting
+    any task, so the request then goes once more without it, and unretried.
+    """
+    keyed = {**body, "idempotency_key": "ark-cua-" + secrets.token_hex(16)}
+    try:
+        envelope = cua_auth.authorized_call(
+            state, base_url, "POST", path, body=keyed, timeout=_call_timeout(0), retries=IDEMPOTENT_RETRIES
+        )
+    except SkillError as exc:
+        if "TaskIdempotencyUnavailable" not in (exc.code, exc.extra.get("upstream_code")):
+            raise
+        return cua_auth.authorized_call(state, base_url, "POST", path, body=body, timeout=_call_timeout(0))
+    session.remember_submission(envelope.get("invocation_id"), path, keyed)
+    return envelope
+
+
+def _awaiting_model_authorization(envelope):
+    return (envelope.get("progress") or {}).get("state") == "awaiting_model_authorization"
+
+
+def _recover_model_authorization(state, base_url, envelope, session):
+    """Send a task's creation request again when CUA lost model authorization.
+
+    The gateway then authorizes the model anew and resumes the same Run;
+    polling alone never does. Only a request kept by _create_task can be sent
+    again, at most once per MODEL_AUTHORIZATION_RETRY_SECONDS. A retryable
+    failure leaves the task waiting for the next check.
+    """
+    if not _awaiting_model_authorization(envelope):
+        return envelope
+    task_id = envelope.get("invocation_id")
+    submission = session.submission(task_id)
+    if not submission or time.time() - submission.get("sent_at", 0) < MODEL_AUTHORIZATION_RETRY_SECONDS:
+        return envelope
+    session.remember_submission(task_id, submission["path"], submission["body"])
+    try:
+        return cua_auth.authorized_call(
+            state, base_url, "POST", submission["path"], body=submission["body"], timeout=_call_timeout(0)
+        )
+    except SkillError as exc:
+        if exc.code in RETRYABLE_ERROR_CODES:
+            return envelope
+        raise
+
+
+def _model_authorization_next(next_hint, envelope, session):
+    """Replace the gateway's advice to send the task again: the CLI does that itself."""
+    if not _awaiting_model_authorization(envelope):
+        return next_hint
+    if session.submission(envelope.get("invocation_id")):
+        return {**(next_hint or {}), "agent_hint": "CUA is waiting for model authorization; each check sends "
+                "the original request again to restore it. Keep checking; do not submit the task again."}
+    return {"agent_hint": "CUA lost model authorization and cannot continue this task, which was created "
+            "without a request this CLI can send again. Tell the user. The desktop stays busy until the "
+            "task ends; cancel it and submit the request again only if the user asks."}
+
+
 def _envelope_result(action, envelope, session):
     _remember_task(envelope, session)
-    return {"data": envelope, "next": _next_for_envelope(envelope)}
+    return {"data": envelope, "next": _model_authorization_next(_next_for_envelope(envelope), envelope, session)}
 
 
 def _next_for_envelope(envelope):
@@ -1923,7 +2045,7 @@ def _next_for_envelope(envelope):
         }
     if outcome == "needs_input":
         return {
-            "command": f'{command} answer --invocation-id {invocation_id} --answer "<USER_ANSWER>"',
+            "command": f"{command} answer --invocation-id {invocation_id} --answer - <<'EOF'\n<USER_ANSWER>\nEOF",
             "agent_hint": hint or "Relay input_request.question to the user verbatim, "
             "then submit their reply with answer.",
         }
@@ -2016,7 +2138,8 @@ def build_parser():
     p = sub.add_parser("delegate", help="Delegate the user's original objective to CUA.")
     p.add_argument(
         "--objective", required=True,
-        help="The user's original request. Do not pre-plan or add constraints.",
+        help="The user's original request, unchanged. Do not pre-plan or add constraints. "
+             "Pass - to read it from standard input.",
     )
     p.add_argument("--wait-ms", type=int, default=0,
                    help="Total ms to wait before returning. Calls are chunked at 60 seconds. "
@@ -2033,7 +2156,8 @@ def build_parser():
 
     p = sub.add_parser("answer", help="Submit the user's answer when outcome is needs_input.")
     _add_invocation_args(p)
-    p.add_argument("--answer", required=True, help="The user's answer to input_request.question.")
+    p.add_argument("--answer", required=True,
+                   help="The user's answer to input_request.question. Pass - to read it from standard input.")
     p.add_argument(
         "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
         help="Total ms to wait before returning; calls are chunked at 60 seconds.",
@@ -2130,7 +2254,8 @@ def _add_semantic_parsers(sub):
     p = task.add_parser("run", help="Start a new CUA task, optionally on a chosen desktop.")
     p.add_argument(
         "--objective", required=True,
-        help="The user's original request. Do not pre-plan or add constraints.",
+        help="The user's original request, unchanged. Do not pre-plan or add constraints. "
+             "Pass - to read it from standard input.",
     )
     p.add_argument("--desktop", help="Desktop id or name (from desktop list). Defaults to the bound desktop.")
     p.add_argument("--title", help="Title for the auto-created context.")
@@ -2141,9 +2266,12 @@ def _add_semantic_parsers(sub):
     p.set_defaults(handler=cmd_task_run, action="task run")
 
     p = task.add_parser("continue", help="Continue work in an existing context.")
-    p.add_argument("--objective", required=True, help="What to do next in this context.")
+    p.add_argument("--objective", required=True,
+                   help="The user's request, unchanged. Pass - to read it from standard input.")
     p.add_argument("--context-id", help="The context to continue.")
     p.add_argument("--last-context", action="store_true", help="Use the most recent context id.")
+    p.add_argument("--task-id", "--invocation-id", dest="task_id",
+                   help="An earlier task; the request continues in that task's context.")
     p.add_argument(
         "--wait-ms", type=int, default=0,
         help="Total ms to wait before returning; calls are chunked at 60 seconds. Default 0.",
@@ -2161,7 +2289,8 @@ def _add_semantic_parsers(sub):
 
     p = task.add_parser("answer", help="Answer CUA's question when outcome is needs_input.")
     _add_task_args(p)
-    p.add_argument("--answer", required=True, help="The user's answer to input_request.question.")
+    p.add_argument("--answer", required=True,
+                   help="The user's answer to input_request.question. Pass - to read it from standard input.")
     p.add_argument(
         "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
         help="Total ms to wait before returning; calls are chunked at 60 seconds.",
@@ -2185,7 +2314,8 @@ def _add_semantic_parsers(sub):
 
     p = context.add_parser("add-note", help="Add background to a context without starting a run.")
     _add_context_args(p)
-    p.add_argument("--text", required=True, help="The background/context note to record.")
+    p.add_argument("--text", required=True,
+                   help="The background/context note to record. Pass - to read it from standard input.")
     p.set_defaults(handler=cmd_context_add_note, action="context add-note")
 
     p = context.add_parser("show", help="Show a context summary and recent task.")
@@ -2210,7 +2340,8 @@ def _add_semantic_parsers(sub):
     p = artifact.add_parser("save", help="Download an artifact (file, screenshot, log) to a local path.")
     p.add_argument("--artifact-id", help="The artifact id (from artifact list / result).")
     p.add_argument("--last", action="store_true", help="Use the most recent artifact id.")
-    p.add_argument("--task-id", help="Task id that owns the artifact. Defaults to the most recent task.")
+    p.add_argument("--task-id", "--invocation-id", dest="task_id",
+                   help="Task id that owns the artifact; an invocation id is the same id. Defaults to the most recent task.")
     p.add_argument("--output", help="Where to write the file. Defaults to a temp file named by content type.")
     p.set_defaults(handler=cmd_artifact_save, action="artifact save")
 
@@ -2358,7 +2489,8 @@ def _add_credential_parsers(sub):
 
 
 def _add_task_args(p):
-    p.add_argument("--task-id", help="The task id (same id space as invocation_id).")
+    p.add_argument("--task-id", "--invocation-id", dest="task_id",
+                   help="The task id; an invocation id is the same id.")
     p.add_argument("--last", action="store_true", help="Use the most recent task id from local session cache.")
 
 
@@ -2368,7 +2500,8 @@ def _add_context_args(p):
 
 
 def _add_invocation_args(p):
-    p.add_argument("--invocation-id", help="The invocation id returned by delegate.")
+    p.add_argument("--invocation-id", "--task-id", dest="invocation_id",
+                   help="The invocation id returned by delegate; a task id is the same id.")
     p.add_argument("--last", action="store_true", help="Use the most recent invocation id from local session cache.")
 
 

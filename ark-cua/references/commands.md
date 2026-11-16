@@ -18,16 +18,22 @@ Login reuses an existing eligible AgentPlan account. If login is required, the u
 ## Core delegation
 
 ```bash
-python3 scripts/cua.py delegate --objective "<user request>" [--wait-ms 0]
+python3 scripts/cua.py delegate [--wait-ms 0] --objective - <<'EOF'
+<user request>
+EOF
 python3 scripts/cua.py watch (--invocation-id <id> | --last) [--wait-ms 20000]
-python3 scripts/cua.py answer (--invocation-id <id> | --last) --answer "<reply>"
+python3 scripts/cua.py answer (--invocation-id <id> | --last) --answer - <<'EOF'
+<user reply>
+EOF
 python3 scripts/cua.py result (--invocation-id <id> | --last) [--timeout 600]
 python3 scripts/cua.py cancel (--invocation-id <id> | --last)
 ```
 
+`--objective`, `--answer` and `--text` read standard input when given `-`; in a quoted heredoc (`<<'EOF'`) the shell passes the user's words unchanged, quotation marks included. A task id and an invocation id are the same id, so `--task-id` and `--invocation-id` are interchangeable.
+
 Call `delegate` once and follow `next.command` until a terminal outcome. Use `cancel` only on explicit user request.
 
-Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `--context-id` with that task's `data.platform.context_id`.
+Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `task continue --task-id <id>` for an earlier one.
 
 ## Desktop inspection, start/recovery, shutdown, and CUA App access
 
@@ -56,13 +62,19 @@ The Skill intentionally excludes reboot/reset and persistent model modification.
 ## Tasks and reusable contexts
 
 ```bash
-python3 scripts/cua.py task run --objective "<user request>" \
-  [--desktop <id-or-name>] [--title "<title>"] [--wait-ms 0]
-python3 scripts/cua.py task continue (--context-id <id> | --last-context) \
-  --objective "<user request>" [--wait-ms 0]
+python3 scripts/cua.py task run [--desktop <id-or-name>] [--title "<title>"] [--wait-ms 0] \
+  --objective - <<'EOF'
+<user request>
+EOF
+python3 scripts/cua.py task continue (--context-id <id> | --last-context | --task-id <id>) [--wait-ms 0] \
+  --objective - <<'EOF'
+<user request>
+EOF
 python3 scripts/cua.py task status (--task-id <id> | --last)
 python3 scripts/cua.py task result (--task-id <id> | --last) [--timeout 600]
-python3 scripts/cua.py task answer (--task-id <id> | --last) --answer "<reply>"
+python3 scripts/cua.py task answer (--task-id <id> | --last) --answer - <<'EOF'
+<user reply>
+EOF
 python3 scripts/cua.py task cancel (--task-id <id> | --last)
 
 python3 scripts/cua.py context list
