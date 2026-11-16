@@ -258,7 +258,10 @@ def _validate_base_url(base_url):
 
 def cmd_auth_status(args, state, session):
     base_url = resolve_base_url(args, state)
-    return {"data": cua_auth.auth_status(state, base_url)}
+    data = cua_auth.auth_status(state, base_url)
+    # Which gateway this login serves; an MCP client needs it (references/mcp.md).
+    data["gateway"] = {"url": base_url, "bundled": base_url == (bundled_base_url() or "").strip().rstrip("/")}
+    return {"data": data}
 
 
 def cmd_auth_login(args, state, session):
