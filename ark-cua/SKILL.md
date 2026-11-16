@@ -1,7 +1,7 @@
 ---
 name: ark-cua
-description: Delegate web and desktop tasks to Volcengine AgentPlan CUA. Supports files, reusable tasks, desktop access and lifecycle, browser login sync with CookieCloud, and named credential resources with Credential Agent. Prefer local reasoning or purpose-built local/API tools when they can complete the request directly.
-version: 1.3.1
+description: Delegate web and desktop tasks to Volcengine AgentPlan CUA. Supports files, reusable tasks, desktop access and lifecycle, browser login sync with CookieCloud, named credential resources with Credential Agent, and connecting an MCP client so the user's own agent can call desktop tools directly. Prefer local reasoning or purpose-built local/API tools when they can complete the request directly.
+version: 1.3.2
 license: Apache-2.0
 ---
 
@@ -40,6 +40,7 @@ If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. S
 ## Route special intents
 
 - Specific desktop or reusable context: use `desktop list`, `task run`, `context`, and `task continue`.
+- Direct desktop control by the user's own agent: when the user wants an agent or MCP client to call the desktop's tools itself rather than have CUA complete an objective, follow [references/mcp.md](references/mcp.md). It covers the endpoint, the key, and how an MCP session shares the desktop with tasks.
 - CUA App login URL: run `desktop access` and return its fresh `data.full_interface_url`, falling back to `data.access_url`. Do not reuse or rewrite an earlier URL. See [references/troubleshooting.md](references/troubleshooting.md) if opening it fails.
 - Local file delivery: remove only local-delivery wording from the CUA objective, have CUA export a registered artifact, then use `artifact list` and `artifact save`.
 - Health or configuration inspection: use `ping`, `diagnose`, or `model get`; do not create a task merely to test availability.
