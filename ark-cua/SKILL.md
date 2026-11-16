@@ -46,7 +46,7 @@ Read [references/commands.md](references/commands.md) for non-core commands and 
 4. Record `data.invocation_id`; never submit the same request again.
 5. Drive `data.outcome` until terminal:
    - `in_progress`: run `next.command` and continue watching.
-   - `needs_input`: relay `data.input_request.question` verbatim, then submit the user's reply with `next.command`. CUA acts on the reply as the user's decision, so never answer it yourself; if you cannot ask the user now, end your turn with the question.
+   - `needs_input`: relay `data.input_request.question` verbatim, then submit the user's reply, unchanged, with `next.command`. CUA acts on the reply as the user's decision, so never answer it yourself; if you cannot ask the user now, end your turn with the question.
    - `completed`: use `data.result.text` as the authoritative result.
    - `failed`: report the failure; retry only when requested and safe.
    - `cancelled`: report cancellation.
@@ -58,7 +58,7 @@ If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. W
 - Specific desktop or reusable context: use `desktop list`, `task run`, `context`, and `task continue`.
 - Direct desktop control by the user's own agent: when the user wants an agent or MCP client to call the desktop's tools itself rather than have CUA complete an objective, follow [references/mcp.md](references/mcp.md). It covers the endpoint, the key, and how an MCP session shares the desktop with tasks.
 - CUA App login URL: run `desktop access` and return its fresh `data.full_interface_url`, falling back to `data.access_url`. Do not reuse or rewrite an earlier URL. See [references/troubleshooting.md](references/troubleshooting.md) if opening it fails.
-- Local file delivery: remove only local-delivery wording from the CUA objective, have CUA export a registered artifact, then use `artifact list` and `artifact save`.
+- Local file delivery: CUA cannot write to the user's computer; only files it registered as artifacts can be downloaded. Remove only the local-delivery wording from the objective. When the task completes, use `artifact list` and `artifact save` to a new local path. A file that is not listed has not been registered: ask CUA to export it with `task continue --task-id <id>`, then list again.
 - Health or configuration inspection: use `ping`, `diagnose`, or `model get`; do not create a task merely to test availability.
 - Browser session sync: use `browser-sync` for the requested desktops (or `--all-desktops` for every ready desktop of this login) and websites. All desktops of one owner share one connection, so one extension configuration serves them all. It checks sync results without Chrome and adds a desktop to the connection this computer's extension already uploads to; ask for the user's local Chrome connection only when it reports that setup or an extension change is needed. Use `browser-sync-leave` or `browser-sync-revoke` only on explicit request. Follow [references/credentials.md](references/credentials.md) for extension installation, upload and remote login verification. Keep configuration and Cookie values outside model context.
 - Other credential resources: named environment variables, Secrets, Credential Sets and managed files use Credential Agent; follow [references/credentials.md](references/credentials.md). Keep the requested desktop and resource scope. Ordinary CUA work does not imply credential synchronization.
