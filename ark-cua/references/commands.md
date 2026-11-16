@@ -18,7 +18,7 @@ Login reuses an existing eligible AgentPlan account. If login is required, the u
 ## Core delegation
 
 ```bash
-python3 scripts/cua.py delegate --objective "<request>" [--wait-ms 0]
+python3 scripts/cua.py delegate --objective "<user request>" [--wait-ms 0]
 python3 scripts/cua.py watch (--invocation-id <id> | --last) [--wait-ms 20000]
 python3 scripts/cua.py answer (--invocation-id <id> | --last) --answer "<reply>"
 python3 scripts/cua.py result (--invocation-id <id> | --last) [--timeout 600]
@@ -54,10 +54,10 @@ The Skill intentionally excludes reboot/reset and persistent model modification.
 ## Tasks and reusable contexts
 
 ```bash
-python3 scripts/cua.py task run --objective "<request>" \
+python3 scripts/cua.py task run --objective "<user request>" \
   [--desktop <id-or-name>] [--title "<title>"] [--wait-ms 0]
 python3 scripts/cua.py task continue (--context-id <id> | --last-context) \
-  --objective "<next step>" [--wait-ms 0]
+  --objective "<user request>" [--wait-ms 0]
 python3 scripts/cua.py task status (--task-id <id> | --last)
 python3 scripts/cua.py task result (--task-id <id> | --last) [--timeout 600]
 python3 scripts/cua.py task answer (--task-id <id> | --last) --answer "<reply>"
