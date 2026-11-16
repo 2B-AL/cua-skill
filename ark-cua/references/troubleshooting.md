@@ -15,7 +15,7 @@ Branch on `error.code`; do not parse message text when a stable code exists.
 | `DesktopRetentionCleanupPending` | Cleanup of an expired primary desktop is still in progress. Report it and retry start later only if the user still wants it. |
 | `BillingAccessSuspended` / `AgentPlanSubscriptionInactive` | Starting would violate current billing or subscription eligibility. Report the condition; do not bypass it with a new allocation. |
 | `IdempotencyConflict` | The key is already bound to a different start or shutdown request. Do not change the key to force the action; reconcile the original request first. |
-| `ACTIVE_RUN_CONFLICT` | The new task did not start. Release your own MCP session if it holds the desktop, as SKILL.md describes; otherwise tell the user the desktop is busy and do not retry. |
+| `ACTIVE_RUN_CONFLICT` | The new task did not start. Release your own MCP session if it holds the desktop, as SKILL.md describes; otherwise tell the user the desktop is busy, and retry only if they ask. |
 | `REVISION_CONFLICT` / `RevisionConflict` | The desktop changed before shutdown was accepted. Inspect current desktop state; do not submit a new shutdown without renewed user intent. |
 | `runtime_capability_required` | Revoke the failed desktop ticket and run `desktop access` once for a new URL. Do not rewrite it. If the new URL also fails, report that desktop access is unavailable. |
 | `INVOCATION_NOT_FOUND` | Recheck the ID or use `--last`; never guess. |
