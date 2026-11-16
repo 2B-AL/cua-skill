@@ -155,6 +155,7 @@ class TaskFlowTests(unittest.TestCase):
         self.replies = {("POST", "/v1/tasks"): question}
         reply = self.run_cli("delegate", "--objective", "打开记事本，先问我写什么")
         self.assertIn("answer --invocation-id task_1 --answer - <<'EOF'\n", reply["next"]["command"])
+        self.assertIn("never answer it yourself", reply["next"]["agent_hint"])
 
     def test_a_task_id_and_an_invocation_id_name_the_same_task(self):
         self.replies = {

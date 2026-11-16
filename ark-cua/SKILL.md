@@ -46,7 +46,7 @@ Read [references/commands.md](references/commands.md) for non-core commands and 
 4. Record `data.invocation_id`; never submit the same request again.
 5. Drive `data.outcome` until terminal:
    - `in_progress`: run `next.command` and continue watching.
-   - `needs_input`: relay `data.input_request.question` verbatim, then submit the user's reply with `next.command`.
+   - `needs_input`: relay `data.input_request.question` verbatim, then submit the user's reply with `next.command`. CUA acts on the reply as the user's decision, so never answer it yourself; if you cannot ask the user now, end your turn with the question.
    - `completed`: use `data.result.text` as the authoritative result.
    - `failed`: report the failure; retry only when requested and safe.
    - `cancelled`: report cancellation.

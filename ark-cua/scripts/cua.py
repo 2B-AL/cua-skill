@@ -66,6 +66,10 @@ IDEMPOTENT_RETRIES = 2
 # A task waiting for model authorization gets its creation request again at
 # most this often, however often it is checked.
 MODEL_AUTHORIZATION_RETRY_SECONDS = 30
+# Added to every needs_input hint: an agent that could not ask the user once
+# answered CUA's question itself.
+USER_REPLY_HINT = ("CUA acts on the reply as the user's decision, so never answer it yourself; "
+                   "if you cannot ask the user now, end your turn with the question.")
 CREDENTIAL_TARGET_PROTOCOL = "cua-target/v1"
 CREDENTIAL_RUNTIME = Path(__file__).resolve().parents[1]
 CREDENTIAL_PAIR_POLL_INTERVAL_SEC = 0.5
@@ -1837,8 +1841,8 @@ def _next_for_task(envelope):
     if outcome == "needs_input":
         return {
             "command": f"{command} task answer --task-id {task_id} --answer - <<'EOF'\n<USER_ANSWER>\nEOF",
-            "agent_hint": hint or "Relay input_request.question to the user verbatim, "
-            "then submit their reply with task answer.",
+            "agent_hint": (hint or "Relay input_request.question to the user verbatim, "
+                           "then submit their reply with task answer.") + " " + USER_REPLY_HINT,
         }
     if outcome == "completed":
         return {"agent_hint": hint or "Use data.result.text as the authoritative final result. "
@@ -2046,8 +2050,8 @@ def _next_for_envelope(envelope):
     if outcome == "needs_input":
         return {
             "command": f"{command} answer --invocation-id {invocation_id} --answer - <<'EOF'\n<USER_ANSWER>\nEOF",
-            "agent_hint": hint or "Relay input_request.question to the user verbatim, "
-            "then submit their reply with answer.",
+            "agent_hint": (hint or "Relay input_request.question to the user verbatim, "
+                           "then submit their reply with answer.") + " " + USER_REPLY_HINT,
         }
     if outcome == "completed":
         return {"agent_hint": hint or "Use data.result.text as the authoritative final result."}
