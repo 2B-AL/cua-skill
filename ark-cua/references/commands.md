@@ -27,6 +27,8 @@ python3 scripts/cua.py cancel (--invocation-id <id> | --last)
 
 Call `delegate` once and follow `next.command` until a terminal outcome. Use `cancel` only on explicit user request.
 
+Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `--context-id` with that task's `data.platform.context_id`.
+
 ## Desktop inspection, start/recovery, shutdown, and CUA App access
 
 ```bash

@@ -291,10 +291,11 @@ def cmd_delegate(args, state, session):
     _validate_wait_ms(args.wait_ms)
     # Always create without a synchronous wait so the invocation id is captured
     # before any long polling. This prevents a timeout from causing a duplicate
-    # task submission.
+    # task submission. /v1/tasks, unlike /v1/invocations, also opens a reusable
+    # context, so a follow-up can go to it with `task continue --last-context`.
     body = {"objective": args.objective, "wait_ms": 0}
     envelope = cua_auth.authorized_call(
-        state, base_url, "POST", "/v1/invocations", body=body, timeout=_call_timeout(0)
+        state, base_url, "POST", "/v1/tasks", body=body, timeout=_call_timeout(0)
     )
     envelope = _wait_invocation_with_budget(
         state, base_url, envelope.get("invocation_id"), args.wait_ms, initial_envelope=envelope
@@ -1729,24 +1730,38 @@ def _resolve_task_id(args, session):
 def _resolve_context_id(args, session):
     if getattr(args, "context_id", None):
         return args.context_id
-    if getattr(args, "last_context", False) and session.last_context_id:
-        return session.last_context_id
+    if getattr(args, "last_context", False):
+        if session.last_context_id:
+            return session.last_context_id
+        raise SkillError(
+            "VALIDATION_ERROR",
+            "No context has been saved on this computer yet, so --last-context has nothing to use. "
+            "Pass --context-id <id>: data.platform.context_id of the earlier task, or an id from `context list`.",
+        )
     raise SkillError(
         "VALIDATION_ERROR",
         "context_id is required. Pass --context-id <id> or --last-context.",
     )
 
 
-def _task_result(action, envelope, session):
-    """Persist task/context ids from an envelope, then return data + task-flavored next."""
+def _remember_task(envelope, session):
+    """Make this envelope's task, and its context when it has one, the latest ones.
+
+    Tasks and invocations share one id space, so every command that reports a
+    task records it the same way.
+    """
     task_id = envelope.get("invocation_id")
-    platform = envelope.get("platform") or {}
-    context_id = platform.get("context_id")
+    context_id = (envelope.get("platform") or {}).get("context_id")
     session.set_last(
         last_task_id=task_id,
         last_invocation_id=task_id,
         last_context_id=context_id,
     )
+
+
+def _task_result(action, envelope, session):
+    """Persist task/context ids from an envelope, then return data + task-flavored next."""
+    _remember_task(envelope, session)
     return {"data": envelope, "next": _next_for_task(envelope)}
 
 
@@ -1889,9 +1904,7 @@ def _validate_wait_ms(wait_ms):
 
 
 def _envelope_result(action, envelope, session):
-    invocation_id = envelope.get("invocation_id")
-    if invocation_id:
-        session.set_last_invocation_id(invocation_id)
+    _remember_task(envelope, session)
     return {"data": envelope, "next": _next_for_envelope(envelope)}
 
 

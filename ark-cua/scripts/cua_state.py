@@ -300,12 +300,6 @@ class SessionState(_JsonFile):
     def last_invocation_id(self):
         return self.data.get("last_invocation_id")
 
-    def set_last_invocation_id(self, invocation_id):
-        if not invocation_id:
-            return
-        self.data["last_invocation_id"] = invocation_id
-        self.save()
-
     # The semantic command surface (task/context/artifact) remembers the
     # most recent id of each kind so weak agents can use `--last-*` instead of
     # threading ids through every call.
