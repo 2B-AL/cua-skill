@@ -1,8 +1,10 @@
 # ARK CUA
 
-This repository publishes the **ark-cua** skill for delegating web and desktop
-tasks to CUA. The repository is `2B-AL/cua-skill`; the skill directory and name
-are both `ark-cua`.
+This repository publishes the **ark-cua** skill, which lets a coding agent such
+as Claude Code or Codex do work on the user's cloud computer through Volcengine
+AgentPlan CUA: delegate tasks and follow-ups, take screenshots, bring files
+back, and manage desktop access. The repository is `2B-AL/cua-skill`; the skill
+directory and name are both `ark-cua`.
 
 ## Install or update
 

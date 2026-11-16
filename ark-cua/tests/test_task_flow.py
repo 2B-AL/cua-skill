@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The task commands an agent runs, end to end against a fake gateway.
+"""The commands an agent runs for tasks, end to end against a fake gateway.
 
 A follow-up continues the context of the delegated task, the user's words
 reach the gateway unchanged, a task id and an invocation id name the same
@@ -20,6 +20,7 @@ task, a call lost to a dropped connection is retried, and a task that lost
 model authorization is resumed by sending its creation request again.
 """
 
+import base64
 import contextlib
 import http.client
 import io
@@ -100,8 +101,7 @@ class TaskFlowTests(unittest.TestCase):
             ("POST", "/v1/invocations/task_1/watch"): task("task_1", "ctx_1"),
             ("POST", "/v1/contexts/ctx_1/tasks"): task("task_2", "ctx_1"),
         }
-        self.assertTrue(self.run_cli("delegate", "--objective", "在云电脑上打开 B 站")["ok"])
-        self.assertEqual(self.run_cli("watch", "--last")["data"]["outcome"], "completed")
+        self.assertEqual(self.run_cli("delegate", "--objective", "在云电脑上打开 B 站")["data"]["outcome"], "completed")
         follow_up = self.run_cli("task", "continue", "--last-context", "--objective", "第一个视频是谁发的")
 
         self.assertEqual(follow_up["data"]["invocation_id"], "task_2")
@@ -203,11 +203,11 @@ class TaskFlowTests(unittest.TestCase):
     def test_each_task_is_created_under_its_own_key_kept_until_the_task_ends(self):
         self.replies = {("POST", "/v1/tasks"): [task("task_1", "ctx_1", outcome="in_progress"), task("task_2", "ctx_2")],
                         ("POST", "/v1/invocations/task_1/watch"): task("task_1", "ctx_1")}
-        self.run_cli("delegate", "--objective", "第一个")
+        self.run_cli("delegate", "--wait-ms", "0", "--objective", "第一个")
         kept = self.saved()["submissions"]["task_1"]
         self.assertEqual((kept["path"], kept["body"]), ("/v1/tasks", self.calls[0][2]))
         self.run_cli("watch", "--last")
-        self.run_cli("delegate", "--objective", "第二个")
+        self.run_cli("delegate", "--wait-ms", "0", "--objective", "第二个")
         first, second = self.calls[0][2]["idempotency_key"], self.calls[2][2]["idempotency_key"]
         self.assertTrue(first.startswith("ark-cua-") and second.startswith("ark-cua-") and first != second)
         self.assertEqual(self.saved()["submissions"], {})
@@ -215,7 +215,7 @@ class TaskFlowTests(unittest.TestCase):
     def test_a_lost_creation_response_is_retried_under_the_same_key(self):
         self.replies = {("POST", "/v1/tasks"): [SkillError("NETWORK", "The connection dropped."),
                                                 task("task_1", "ctx_1", outcome="in_progress")]}
-        self.assertEqual(self.run_cli("delegate", "--objective", "打开记事本")["data"]["invocation_id"], "task_1")
+        self.assertEqual(self.run_cli("delegate", "--wait-ms", "0", "--objective", "打开记事本")["data"]["invocation_id"], "task_1")
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.calls[0][2], self.calls[1][2])
 
@@ -230,7 +230,7 @@ class TaskFlowTests(unittest.TestCase):
 
     def test_a_runtime_without_keyed_creation_gets_the_request_without_a_key(self):
         self.replies = {("POST", "/v1/tasks"): [IDEMPOTENCY_UNAVAILABLE, task("task_1", "ctx_1", outcome="in_progress")]}
-        self.assertEqual(self.run_cli("delegate", "--objective", "打开记事本")["data"]["invocation_id"], "task_1")
+        self.assertEqual(self.run_cli("delegate", "--wait-ms", "0", "--objective", "打开记事本")["data"]["invocation_id"], "task_1")
         self.assertIn("idempotency_key", self.calls[0][2])
         self.assertEqual(self.calls[1][2], {"objective": "打开记事本", "wait_ms": 0})
         self.assertNotIn("task_1", self.saved().get("submissions", {}))
@@ -251,8 +251,18 @@ class TaskFlowTests(unittest.TestCase):
                         ("POST", "/v1/tasks"): task("task_1", "ctx_1", outcome="in_progress", progress={"state": "running"})}
         reply = self.run_cli("watch", "--last")
         self.assertEqual(self.calls[1], ("POST", "/v1/tasks", body))
-        self.assertEqual(reply["data"]["progress"]["state"], "running")
+        self.assertEqual(reply["data"]["outcome"], "in_progress")
         self.assertIn("watch --invocation-id task_1", reply["next"]["command"])
+
+    def test_a_new_task_is_sent_again_as_soon_as_authorization_lapses(self):
+        # Authorization can lapse seconds after creation; the first resend does not wait.
+        self.replies = {("POST", "/v1/tasks"): [task("task_1", "ctx_1", outcome="in_progress")] * 2,
+                        ("GET", "/v1/tasks/task_1"): self.awaiting_authorization()}
+        self.run_cli("delegate", "--wait-ms", "0", "--objective", "打开 B 站")
+        self.run_cli("task", "status", "--last")
+        self.assertEqual([call[:2] for call in self.calls],
+                         [("POST", "/v1/tasks"), ("GET", "/v1/tasks/task_1"), ("POST", "/v1/tasks")])
+        self.assertEqual(self.calls[2][2], self.calls[0][2])
 
     def test_the_request_is_sent_again_at_most_every_half_minute(self):
         self.keep_submission(sent_at=time.time())
@@ -269,6 +279,72 @@ class TaskFlowTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertNotIn("command", reply["next"])
         self.assertIn("Tell the user", reply["next"]["agent_hint"])
+
+
+    def test_submit_commands_wait_by_default(self):
+        parser = cua.build_parser()
+        for argv in (["delegate", "--objective", "x"], ["task", "run", "--objective", "x"],
+                     ["task", "continue", "--last-context", "--objective", "x"]):
+            self.assertEqual(parser.parse_args(argv).wait_ms, cua.DEFAULT_WATCH_WAIT_MS)
+        self.assertEqual(parser.parse_args(["delegate", "--objective", "x", "--wait-ms", "0"]).wait_ms, 0)
+
+    def test_a_short_task_completes_in_the_delegate_call(self):
+        self.replies = {("POST", "/v1/tasks"): task("task_1", "ctx_1", outcome="in_progress"),
+                        ("POST", "/v1/invocations/task_1/watch"): task("task_1", "ctx_1", result={"text": "杭州今天多云"})}
+        reply = self.run_cli("delegate", "--objective", "查一下杭州天气")
+        self.assertEqual((reply["data"]["outcome"], reply["data"]["result"]), ("completed", {"text": "杭州今天多云"}))
+        self.assertNotIn("command", reply["next"])
+
+    def test_an_interrupted_wait_keeps_the_created_task(self):
+        dropped = SkillError("NETWORK", "connection reset")
+        self.replies = {("POST", "/v1/tasks"): task("task_1", "ctx_1", outcome="in_progress"),
+                        ("POST", "/v1/invocations/task_1/watch"): [dropped] * 3}
+        reply = self.run_cli("delegate", "--objective", "打开记事本")
+        self.assertTrue(reply["ok"])
+        self.assertEqual(reply["data"]["wait_interrupted"], {"code": "NETWORK", "message": "connection reset"})
+        self.assertIn("watch --invocation-id task_1", reply["next"]["command"])
+        self.assertEqual(self.saved()["last_invocation_id"], "task_1")
+
+    def test_a_rejected_submission_is_still_an_error(self):
+        self.replies = {("POST", "/v1/tasks"): SkillError("FORBIDDEN", "Gateway request failed (Forbidden).")}
+        reply = self.run_cli("delegate", "--objective", "打开记事本")
+        self.assertEqual((reply["ok"], reply["error"]["code"]), (False, "FORBIDDEN"))
+        self.assertNotIn("last_invocation_id", self.saved())
+
+    def test_the_output_keeps_what_the_agent_acts_on(self):
+        advisory = {"url": "https://security.example/view", "expires_at": "2026-11-16T12:00:00Z"}
+        full = {"invocation_id": "task_1", "outcome": "completed", "result": {"text": "完成", "artifacts": [], "error": None},
+                "platform": {"desktop": "desk_1", "session_id": "sess_1", "run_id": "run_1", "context_id": "ctx_1",
+                             "trace_id": None, "security_advisory": advisory},
+                "progress": {"state": "done", "step_count": 4, "summary": "CUA finished."},
+                "diagnostics": {"request_id": "req_1"}, "model_selection": {"model": "m"},
+                "next_action": {"agent_hint": "Use the result."}, "input_request": None}
+        self.replies = {("POST", "/v1/tasks"): full}
+        data = self.run_cli("delegate", "--objective", "做完")["data"]
+        self.assertEqual(data, {"invocation_id": "task_1", "outcome": "completed", "result": {"text": "完成"},
+                                "platform": {"desktop": "desk_1", "run_id": "run_1", "context_id": "ctx_1",
+                                             "security_advisory": advisory},
+                                "request_id": "req_1"})
+
+
+    def test_a_screenshot_is_saved_to_a_new_file_without_a_task(self):
+        image = b"\x89PNG\r\n\x1a\n fake image bytes"
+        shot = {"environment": {"id": "desk_1"}, "screenshot": {
+            "mime_type": "image/png", "width": 1920, "height": 1080, "base64": base64.b64encode(image).decode()}}
+        self.replies = {("GET", "/v1/desktop/screenshot?desktop=desk_1"): shot}
+        target = self.session_file.parent / "screen.png"
+        reply = self.run_cli("desktop", "screenshot", "--desktop", "desk_1", "--output", str(target))
+        self.assertEqual(target.read_bytes(), image)
+        self.assertEqual(reply["data"], {"file": str(target), "mime_type": "image/png", "bytes": len(image),
+                                         "width": 1920, "height": 1080, "desktop_id": "desk_1"})
+        again = self.run_cli("desktop", "screenshot", "--desktop", "desk_1", "--output", str(target))
+        self.assertEqual(again["error"]["code"], "VALIDATION_ERROR")
+        self.assertEqual(target.read_bytes(), image)
+
+    def test_a_screenshot_without_an_image_is_an_error(self):
+        self.replies = {("GET", "/v1/desktop/screenshot"): {"screenshot": {"mime_type": "image/png", "base64": ""}}}
+        reply = self.run_cli("desktop", "screenshot")
+        self.assertEqual(reply["error"]["code"], "UPSTREAM_PROTOCOL_ERROR")
 
 
 if __name__ == "__main__":

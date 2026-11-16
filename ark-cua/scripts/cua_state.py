@@ -331,16 +331,16 @@ class SessionState(_JsonFile):
             self.save()
 
     # The creation request (path and body, idempotency key included) of each
-    # unfinished task and when it was last sent. Sending it again makes the
-    # gateway authorize the model anew and resume the same Run after CUA lost
-    # model authorization. An entry is removed when the task ends; only the
-    # newest few are kept.
-    def remember_submission(self, task_id, path, body):
+    # unfinished task and when it was last sent again (0 = not yet). Sending it
+    # again makes the gateway authorize the model anew and resume the same Run
+    # after CUA lost model authorization. An entry is removed when the task
+    # ends; only the newest few are kept.
+    def remember_submission(self, task_id, path, body, sent_at=0.0):
         if not task_id:
             return
         records = self._submissions()
         records.pop(task_id, None)
-        records[task_id] = {"path": path, "body": body, "sent_at": time.time()}
+        records[task_id] = {"path": path, "body": body, "sent_at": sent_at}
         self.data["submissions"] = dict(list(records.items())[-SUBMISSIONS_KEPT:])
         self.save()
 

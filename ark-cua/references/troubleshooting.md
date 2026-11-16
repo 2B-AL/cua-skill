@@ -25,7 +25,8 @@ Branch on `error.code`; do not parse message text when a stable code exists.
 | `PAYLOAD_TOO_LARGE` | Shorten task input or use an artifact smaller than 256 MiB. |
 | `MODEL_TIMEOUT` | Report the safe reason and request ID; retry only when requested. |
 | `DESKTOP_UNHEALTHY` / `SESSION_CLEANUP` / `UPSTREAM_FAILURE` | Report safe diagnostic fields; do not retry blindly. |
-| `GATEWAY_TIMEOUT` / `CUA_BACKEND_UNAVAILABLE` / `RATE_LIMITED` / `NETWORK` | Retry the same watch/status/result operation; do not create a duplicate task. |
+| `GATEWAY_TIMEOUT` / `CUA_BACKEND_UNAVAILABLE` / `RATE_LIMITED` | Retry the same watch/status/result operation; do not create a duplicate task. |
+| `NETWORK` | The gateway did not answer. Re-run the same watch/status/result operation once; if it still fails, tell the user that the gateway in `error.gateway.url` is unreachable and where its address comes from (`error.gateway.source`). Never print environment variables or credential files to diagnose it. |
 | `VALIDATION_ERROR` | Correct the indicated argument or choose a new output path. |
 | `COOKIECLOUD_NODE_REQUIRED` | Automatic configuration needs Node.js 22+. Ask the user to install it before continuing. |
 | `COOKIECLOUD_CHROME_UNAVAILABLE` | Check that CookieCloud is installed and the user allowed the Chrome connection. Preserve the browser and login state; do not claim an unconfirmed upload succeeded. |

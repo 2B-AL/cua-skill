@@ -72,6 +72,7 @@ MODEL_AUTHORIZATION_RETRY_SECONDS = 30
 # answered CUA's question itself.
 USER_REPLY_HINT = ("CUA acts on the reply as the user's decision, so never answer it yourself; "
                    "if you cannot ask the user now, end your turn with the question.")
+COMPLETED_HINT = "data.result.text is the authoritative result; reply with it as returned."
 NO_LAST_TASK = ("No task has been recorded on this computer yet, so --last has nothing to use. "
                 "Pass --task-id <id> (the same id as --invocation-id) from the command that created the task.")
 CREDENTIAL_TARGET_PROTOCOL = "cua-target/v1"
@@ -334,9 +335,7 @@ def cmd_delegate(args, state, session):
     # context, so a follow-up can go to it with `task continue --last-context`.
     body = {"objective": args.objective, "wait_ms": 0}
     envelope = _create_task(state, base_url, "/v1/tasks", body, session)
-    envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
-    )
+    envelope = _wait_after_submit(state, base_url, envelope.get("invocation_id"), args.wait_ms, session, envelope)
     return _envelope_result("delegate", envelope, session)
 
 
@@ -356,9 +355,7 @@ def cmd_answer(args, state, session):
         state, base_url, "POST", f"/v1/invocations/{invocation_id}/answer",
         body=body, timeout=_call_timeout(0)
     )
-    envelope = _wait_invocation_with_budget(
-        state, base_url, invocation_id, args.wait_ms, session, initial_envelope=envelope
-    )
+    envelope = _wait_after_submit(state, base_url, invocation_id, args.wait_ms, session, envelope)
     return _envelope_result("answer", envelope, session)
 
 
@@ -492,6 +489,28 @@ def cmd_desktop_access(args, state, session):
     return {"data": data, "next": {"agent_hint": hint}}
 
 
+def cmd_desktop_screenshot(args, state, session):
+    """Capture the desktop as it is now and save the image locally, without a CUA task."""
+    base_url = resolve_base_url(args, state)
+    path = "/v1/desktop/screenshot"
+    if getattr(args, "desktop", None):
+        path += "?" + urllib.parse.urlencode({"desktop": args.desktop})
+    data = cua_auth.authorized_call(state, base_url, "GET", path, timeout=120, retries=IDEMPOTENT_RETRIES)
+    shot = data.get("screenshot") or {}
+    try:
+        raw = base64.b64decode(shot.get("base64") or "", validate=True)
+    except (ValueError, TypeError) as exc:
+        raise SkillError("UPSTREAM_PROTOCOL_ERROR", f"The screenshot was not valid base64: {exc}")
+    if not raw:
+        raise SkillError("UPSTREAM_PROTOCOL_ERROR", "The gateway returned no screenshot image.")
+    mime_type = shot.get("mime_type") or "image/jpeg"
+    file = _write_artifact(raw, args.output, mime_type)
+    return {"data": {
+        "file": file, "mime_type": mime_type, "bytes": len(raw), "width": shot.get("width"),
+        "height": shot.get("height"), "desktop_id": (data.get("environment") or {}).get("id"),
+    }, "next": {"agent_hint": "The screenshot is saved at data.file. Give the user that path or show the image."}}
+
+
 def cmd_desktop_revoke_access(args, state, session):
     base_url = resolve_base_url(args, state)
     body = {"ticket": args.ticket} if args.ticket else {"access_url": args.access_url}
@@ -602,9 +621,7 @@ def cmd_task_run(args, state, session):
     if args.title:
         body["title"] = args.title
     envelope = _create_task(state, base_url, "/v1/tasks", body, session)
-    envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
-    )
+    envelope = _wait_after_submit(state, base_url, envelope.get("invocation_id"), args.wait_ms, session, envelope)
     return _task_result("task run", envelope, session)
 
 
@@ -617,9 +634,7 @@ def cmd_task_continue(args, state, session):
         context_id = _resolve_context_id(args, session)
     body = {"objective": args.objective, "wait_ms": 0}
     envelope = _create_task(state, base_url, f"/v1/contexts/{context_id}/tasks", body, session)
-    envelope = _wait_invocation_with_budget(
-        state, base_url, envelope.get("invocation_id"), args.wait_ms, session, initial_envelope=envelope
-    )
+    envelope = _wait_after_submit(state, base_url, envelope.get("invocation_id"), args.wait_ms, session, envelope)
     return _task_result("task continue", envelope, session)
 
 
@@ -667,9 +682,7 @@ def cmd_task_answer(args, state, session):
     envelope = cua_auth.authorized_call(
         state, base_url, "POST", f"/v1/tasks/{task_id}/answer", body=body, timeout=_call_timeout(0)
     )
-    envelope = _wait_invocation_with_budget(
-        state, base_url, task_id, args.wait_ms, session, initial_envelope=envelope
-    )
+    envelope = _wait_after_submit(state, base_url, task_id, args.wait_ms, session, envelope)
     return _task_result("task answer", envelope, session)
 
 
@@ -1832,7 +1845,8 @@ def _remember_task(envelope, session):
 def _task_result(action, envelope, session):
     """Persist task/context ids from an envelope, then return data + task-flavored next."""
     _remember_task(envelope, session)
-    return {"data": envelope, "next": _model_authorization_next(_next_for_task(envelope), envelope, session)}
+    next_hint = _model_authorization_next(_next_for_task(envelope), envelope, session)
+    return {"data": _compact_envelope(envelope), "next": next_hint}
 
 
 def _next_for_task(envelope):
@@ -1855,8 +1869,7 @@ def _next_for_task(envelope):
                            "then submit their reply with task answer.") + " " + USER_REPLY_HINT,
         }
     if outcome == "completed":
-        return {"agent_hint": hint or "Use data.result.text as the authoritative final result. "
-                "Save any produced files with artifact save."}
+        return {"agent_hint": hint or COMPLETED_HINT + " Save any produced files with artifact save."}
     if outcome == "failed":
         return {
             "agent_hint": hint or "CUA could not complete the task. "
@@ -1977,6 +1990,21 @@ def _validate_wait_ms(wait_ms):
         raise SkillError("VALIDATION_ERROR", "--wait-ms must be >= 0")
 
 
+def _wait_after_submit(state, base_url, invocation_id, wait_ms, session, envelope):
+    """Wait after a create or answer call that took effect.
+
+    A failed wait returns the submitted envelope with the reason instead of an
+    error, so the caller keeps the same task and continues with watch rather
+    than submitting again.
+    """
+    try:
+        return _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, session, initial_envelope=envelope)
+    except SkillError as exc:
+        if not invocation_id:
+            raise
+        return {**envelope, "wait_interrupted": {"code": exc.code, "message": exc.message}}
+
+
 def _create_task(state, base_url, path, body, session):
     """POST a new task under a fresh idempotency key and keep the request.
 
@@ -1995,8 +2023,11 @@ def _create_task(state, base_url, path, body, session):
     except SkillError as exc:
         if "TaskIdempotencyUnavailable" not in (exc.code, exc.extra.get("upstream_code")):
             raise
-        return cua_auth.authorized_call(state, base_url, "POST", path, body=body, timeout=_call_timeout(0))
-    session.remember_submission(envelope.get("invocation_id"), path, keyed)
+        envelope = cua_auth.authorized_call(state, base_url, "POST", path, body=body, timeout=_call_timeout(0))
+    else:
+        session.remember_submission(envelope.get("invocation_id"), path, keyed)
+    # Recorded before any wait, so --last names this task even if the wait is cut short.
+    _remember_task(envelope, session)
     return envelope
 
 
@@ -2009,16 +2040,18 @@ def _recover_model_authorization(state, base_url, envelope, session):
 
     The gateway then authorizes the model anew and resumes the same Run;
     polling alone never does. Only a request kept by _create_task can be sent
-    again, at most once per MODEL_AUTHORIZATION_RETRY_SECONDS. A retryable
-    failure leaves the task waiting for the next check.
+    again: the first time as soon as the wait is seen, then at most once per
+    MODEL_AUTHORIZATION_RETRY_SECONDS. A retryable failure leaves the task
+    waiting for the next check.
     """
     if not _awaiting_model_authorization(envelope):
         return envelope
     task_id = envelope.get("invocation_id")
     submission = session.submission(task_id)
-    if not submission or time.time() - submission.get("sent_at", 0) < MODEL_AUTHORIZATION_RETRY_SECONDS:
+    now = time.time()
+    if not submission or now - submission.get("sent_at", 0) < MODEL_AUTHORIZATION_RETRY_SECONDS:
         return envelope
-    session.remember_submission(task_id, submission["path"], submission["body"])
+    session.remember_submission(task_id, submission["path"], submission["body"], sent_at=now)
     try:
         return cua_auth.authorized_call(
             state, base_url, "POST", submission["path"], body=submission["body"], timeout=_call_timeout(0)
@@ -2041,9 +2074,42 @@ def _model_authorization_next(next_hint, envelope, session):
             "task ends; cancel it and submit the request again only if the user asks."}
 
 
+# Gateway bookkeeping the calling agent does not act on, re-read on every later
+# turn otherwise: the request id stays at the top level, the hint goes once into
+# `next`, and the progress summary is fixed wording.
+_ENVELOPE_BOOKKEEPING = ("diagnostics", "model_selection", "next_action")
+_PLATFORM_FIELDS = ("desktop", "run_id", "context_id", "trace_id", "security_advisory")
+
+
+def _empty(value):
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _compact_envelope(envelope):
+    """The task envelope without bookkeeping fields and empty values."""
+    data = {k: v for k, v in envelope.items() if k not in _ENVELOPE_BOOKKEEPING and not _empty(v)}
+    for key, keep in (("result", None), ("platform", _PLATFORM_FIELDS)):
+        part = data.get(key)
+        if isinstance(part, dict):
+            part = {k: v for k, v in part.items() if (keep is None or k in keep) and not _empty(v)}
+            if part:
+                data[key] = part
+            else:
+                data.pop(key)
+    progress = data.pop("progress", None)
+    step_count = progress.get("step_count") if isinstance(progress, dict) else None
+    if data.get("outcome") == "in_progress" and step_count is not None:
+        data["progress"] = {"step_count": step_count}
+    request_id = (envelope.get("diagnostics") or {}).get("request_id")
+    if request_id and not data.get("request_id"):
+        data["request_id"] = request_id
+    return data
+
+
 def _envelope_result(action, envelope, session):
     _remember_task(envelope, session)
-    return {"data": envelope, "next": _model_authorization_next(_next_for_envelope(envelope), envelope, session)}
+    next_hint = _model_authorization_next(_next_for_envelope(envelope), envelope, session)
+    return {"data": _compact_envelope(envelope), "next": next_hint}
 
 
 def _next_for_envelope(envelope):
@@ -2066,7 +2132,7 @@ def _next_for_envelope(envelope):
                            "then submit their reply with answer.") + " " + USER_REPLY_HINT,
         }
     if outcome == "completed":
-        return {"agent_hint": hint or "Use data.result.text as the authoritative final result."}
+        return {"agent_hint": hint or COMPLETED_HINT}
     if outcome == "failed":
         return {
             "agent_hint": hint or "CUA could not complete the task. "
@@ -2157,9 +2223,9 @@ def build_parser():
         help="The user's original request, unchanged. Do not pre-plan or add constraints. "
              "Pass - to read it from standard input.",
     )
-    p.add_argument("--wait-ms", type=int, default=0,
-                   help="Total ms to wait before returning. Calls are chunked at 60 seconds. "
-                        "Default 0 returns the invocation id immediately. Does not cancel the task.")
+    p.add_argument("--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
+                   help="Total ms to wait for a terminal outcome before returning; calls are chunked at "
+                        "60 seconds. 0 returns the task id at once. Does not cancel the task.")
     p.set_defaults(handler=cmd_delegate, action="delegate")
 
     p = sub.add_parser("watch", help="Wait for or check an invocation's next state.")
@@ -2212,6 +2278,11 @@ def _add_semantic_parsers(sub):
     p = desktop.add_parser("access", help="Get a temporary CUA App login URL.")
     p.add_argument("--desktop", help="Exact owned desktop id; omit to use the selected desktop.")
     p.set_defaults(handler=cmd_desktop_access, action="desktop access")
+
+    p = desktop.add_parser("screenshot", help="Save a screenshot of the cloud desktop to a new local file. Runs no CUA task.")
+    p.add_argument("--desktop", help="Exact owned desktop id; omit to use the selected desktop.")
+    p.add_argument("--output", help="New local file path; never overwritten. Omit for a temporary file.")
+    p.set_defaults(handler=cmd_desktop_screenshot, action="desktop screenshot")
 
     p = desktop.add_parser("revoke-access", help="Revoke a temporary CUA App access ticket.")
     group = p.add_mutually_exclusive_group(required=True)
@@ -2276,8 +2347,9 @@ def _add_semantic_parsers(sub):
     p.add_argument("--desktop", help="Desktop id or name (from desktop list). Defaults to the bound desktop.")
     p.add_argument("--title", help="Title for the auto-created context.")
     p.add_argument(
-        "--wait-ms", type=int, default=0,
-        help="Total ms to wait before returning; calls are chunked at 60 seconds. Default 0.",
+        "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
+        help="Total ms to wait for a terminal outcome before returning; calls are chunked at 60 seconds. "
+             "0 returns the task id at once.",
     )
     p.set_defaults(handler=cmd_task_run, action="task run")
 
@@ -2289,8 +2361,9 @@ def _add_semantic_parsers(sub):
     p.add_argument("--task-id", "--invocation-id", dest="task_id",
                    help="An earlier task; the request continues in that task's context.")
     p.add_argument(
-        "--wait-ms", type=int, default=0,
-        help="Total ms to wait before returning; calls are chunked at 60 seconds. Default 0.",
+        "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
+        help="Total ms to wait for a terminal outcome before returning; calls are chunked at 60 seconds. "
+             "0 returns the task id at once.",
     )
     p.set_defaults(handler=cmd_task_continue, action="task continue")
 
