@@ -87,9 +87,10 @@ class TaskFlowTests(unittest.TestCase):
         out = io.StringIO()
         # The fake answers single attempts, so the CLI's own retries still run.
         with patch.object(cua.cua_auth, "_authorized_call_once", side_effect=self.gateway), \
-                patch.object(cua.cua_auth.time, "sleep"), patch.object(sys, "stdin", Stdin(stdin)), \
+                patch.object(cua.cua_auth.time, "sleep") as sleep, patch.object(sys, "stdin", Stdin(stdin)), \
                 contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             cua.main(list(argv))
+        self.slept = [call.args[0] for call in sleep.call_args_list]
         return json.loads(out.getvalue())
 
     def test_a_follow_up_goes_to_the_context_of_the_delegated_task(self):
@@ -123,6 +124,14 @@ class TaskFlowTests(unittest.TestCase):
         self.assertEqual(reply["data"]["invocation_id"], "task_2")
         self.assertEqual([call[:2] for call in self.calls],
                          [("GET", "/v1/tasks/task_1"), ("POST", "/v1/contexts/ctx_1/tasks")])
+
+    def test_an_unfinished_follow_up_is_watched_rather_than_polled(self):
+        # task status answers at once, so following it would cost a turn every few seconds.
+        self.session_file.write_text(json.dumps({"last_context_id": "ctx_1"}))
+        unfinished = task("task_2", "ctx_1", outcome="in_progress")
+        self.replies = {("POST", "/v1/contexts/ctx_1/tasks"): unfinished, ("POST", "/v1/invocations/task_2/watch"): unfinished}
+        reply = self.run_cli("task", "continue", "--last-context", "--objective", "再告诉我播放量")
+        self.assertIn("watch --invocation-id task_2", reply["next"]["command"])
 
     def test_last_says_when_no_task_is_recorded(self):
         for argv in (("watch", "--last"), ("task", "status", "--last")):
@@ -199,7 +208,6 @@ class TaskFlowTests(unittest.TestCase):
         self.assertIn("No artifact has been saved", reply["error"]["message"])
         self.assertEqual(self.calls, [])
 
-
     def test_each_task_is_created_under_its_own_key_kept_until_the_task_ends(self):
         self.replies = {("POST", "/v1/tasks"): [task("task_1", "ctx_1", outcome="in_progress"), task("task_2", "ctx_2")],
                         ("POST", "/v1/invocations/task_1/watch"): task("task_1", "ctx_1")}
@@ -269,8 +277,18 @@ class TaskFlowTests(unittest.TestCase):
         self.replies = {("POST", "/v1/invocations/task_1/watch"): self.awaiting_authorization()}
         reply = self.run_cli("watch", "--last")
         self.assertEqual([call[1] for call in self.calls], ["/v1/invocations/task_1/watch"])
+        # The gateway's watch answers at once while CUA waits; the CLI still uses up the wait.
+        self.assertAlmostEqual(sum(self.slept), cua.DEFAULT_WATCH_WAIT_MS / 1000, delta=1)
         self.assertIn("do not submit the task again", reply["next"]["agent_hint"])
         self.assertNotIn("Repeat the original", reply["next"]["agent_hint"])
+
+    def test_a_watch_waits_for_a_send_that_falls_within_it(self):
+        body = self.keep_submission(sent_at=time.time() - 25)
+        self.replies = {("POST", "/v1/invocations/task_1/watch"): self.awaiting_authorization(),
+                        ("POST", "/v1/tasks"): task("task_1", "ctx_1", outcome="in_progress", progress={"state": "running"})}
+        self.run_cli("watch", "--last")
+        self.assertAlmostEqual(self.slept[0], 5, delta=1)
+        self.assertEqual(self.calls[1], ("POST", "/v1/tasks", body))
 
     def test_a_task_that_cannot_be_sent_again_is_left_to_the_user(self):
         self.session_file.write_text(json.dumps({"last_invocation_id": "task_1"}))
@@ -280,6 +298,14 @@ class TaskFlowTests(unittest.TestCase):
         self.assertNotIn("command", reply["next"])
         self.assertIn("Tell the user", reply["next"]["agent_hint"])
 
+    def test_a_result_wait_ends_when_the_task_cannot_be_sent_again(self):
+        # Nothing else resumes such a task, so waiting out --timeout would only hold the agent.
+        self.session_file.write_text(json.dumps({"last_invocation_id": "task_1", "last_task_id": "task_1"}))
+        self.replies = {("GET", "/v1/invocations/task_1"): self.awaiting_authorization(),
+                        ("GET", "/v1/tasks/task_1/result"): self.awaiting_authorization()}
+        for argv in (("result", "--last"), ("task", "result", "--last")):
+            self.assertIn("Tell the user", self.run_cli(*argv)["next"]["agent_hint"])
+        self.assertEqual([call[1] for call in self.calls], ["/v1/invocations/task_1", "/v1/tasks/task_1/result"])
 
     def test_submit_commands_wait_by_default(self):
         parser = cua.build_parser()
@@ -325,7 +351,6 @@ class TaskFlowTests(unittest.TestCase):
                                 "platform": {"desktop": "desk_1", "run_id": "run_1", "context_id": "ctx_1",
                                              "security_advisory": advisory},
                                 "request_id": "req_1"})
-
 
     def test_a_screenshot_is_saved_to_a_new_file_without_a_task(self):
         image = b"\x89PNG\r\n\x1a\n fake image bytes"

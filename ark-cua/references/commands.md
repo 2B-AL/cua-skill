@@ -31,7 +31,7 @@ python3 scripts/cua.py cancel (--invocation-id <id> | --last)
 
 `--objective`, `--answer` and `--text` read standard input when given `-`; in a quoted heredoc (`<<'EOF'`) the shell passes the user's words unchanged, quotation marks included. A task id and an invocation id are the same id, so `--task-id` and `--invocation-id` are interchangeable.
 
-Call `delegate` once and follow `next.command` until a terminal outcome. `delegate`, `answer`, `task run` and `task continue` wait up to 20 seconds for a terminal outcome by default, so a short task returns its result at once; `--wait-ms 0` returns the task id immediately. Use `cancel` only on explicit user request.
+Call `delegate` once and follow `next.command` until a terminal outcome. `delegate`, `task run`, `task continue`, `answer` and `task answer` wait up to 20 seconds for a terminal outcome by default, so a short task returns its result at once; `--wait-ms 0` returns the task id immediately. Use `cancel` only on explicit user request.
 
 Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `task continue --task-id <id>` for an earlier one.
 

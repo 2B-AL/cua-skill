@@ -379,8 +379,8 @@ def cmd_result(args, state, session):
                 envelope = cua_auth.authorized_call(
                     state, base_url, "GET", f"/v1/invocations/{invocation_id}", retries=IDEMPOTENT_RETRIES
                 )
-            envelope = _recover_model_authorization(state, base_url, envelope, session)
-            if envelope.get("outcome") != "in_progress":
+            envelope = _recover_model_authorization(state, base_url, envelope, session, deadline - now_epoch())
+            if envelope.get("outcome") != "in_progress" or _cannot_restore_model_authorization(envelope, session):
                 break
             envelope = cua_auth.authorized_call(
                 state, base_url, "POST", f"/v1/invocations/{invocation_id}/watch",
@@ -658,8 +658,8 @@ def cmd_task_result(args, state, session):
             envelope = cua_auth.authorized_call(
                 state, base_url, "GET", f"/v1/tasks/{task_id}/result", retries=IDEMPOTENT_RETRIES
             )
-            envelope = _recover_model_authorization(state, base_url, envelope, session)
-            if envelope.get("outcome") != "in_progress":
+            envelope = _recover_model_authorization(state, base_url, envelope, session, deadline - now_epoch())
+            if envelope.get("outcome") != "in_progress" or _cannot_restore_model_authorization(envelope, session):
                 break
             time.sleep(3)
         except SkillError as exc:
@@ -1856,11 +1856,12 @@ def _next_for_task(envelope):
     next_action = envelope.get("next_action") or {}
     hint = next_action.get("agent_hint", "")
     if outcome == "in_progress":
+        # task status answers at once, so polling it costs a turn every few seconds;
+        # watch waits for the next outcome, and a task id is an invocation id.
         return {
-            "command": f"{command} task status --task-id {task_id}",
-            "agent_hint": hint or "Keep checking task status until completed, needs_input, failed, or cancelled. "
-            f"For a hands-off wait use `{command} task result --task-id {task_id}`. "
-            "Do not answer the task from progress.",
+            "command": f"{command} watch --invocation-id {task_id}",
+            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled; "
+            "each watch waits up to 20 seconds. Do not answer the task from progress.",
         }
     if outcome == "needs_input":
         return {
@@ -1978,7 +1979,7 @@ def _wait_invocation_with_budget(state, base_url, invocation_id, wait_ms, sessio
             timeout=_call_timeout(chunk_ms),
             retries=IDEMPOTENT_RETRIES,
         )
-        envelope = _recover_model_authorization(state, base_url, envelope, session)
+        envelope = _recover_model_authorization(state, base_url, envelope, session, remaining_ms / 1000.0)
         if envelope.get("outcome") != "in_progress":
             return envelope
         remaining_ms -= chunk_ms
@@ -2035,23 +2036,35 @@ def _awaiting_model_authorization(envelope):
     return (envelope.get("progress") or {}).get("state") == "awaiting_model_authorization"
 
 
-def _recover_model_authorization(state, base_url, envelope, session):
+def _cannot_restore_model_authorization(envelope, session):
+    """CUA lost model authorization, and this CLI has no request of the task to send again."""
+    return _awaiting_model_authorization(envelope) and not session.submission(envelope.get("invocation_id"))
+
+
+def _recover_model_authorization(state, base_url, envelope, session, max_wait_seconds=0):
     """Send a task's creation request again when CUA lost model authorization.
 
     The gateway then authorizes the model anew and resumes the same Run;
-    polling alone never does. Only a request kept by _create_task can be sent
-    again: the first time as soon as the wait is seen, then at most once per
-    MODEL_AUTHORIZATION_RETRY_SECONDS. A retryable failure leaves the task
-    waiting for the next check.
+    polling alone never does, and the gateway's watch answers at once while
+    the Run waits. Only a request kept by _create_task can be sent again: the
+    first time as soon as the wait is seen, then at most once per
+    MODEL_AUTHORIZATION_RETRY_SECONDS. Until the next send is due, a caller
+    with time left waits here, up to max_wait_seconds, instead of polling at
+    once again. A retryable failure leaves the task waiting for the next check.
     """
     if not _awaiting_model_authorization(envelope):
         return envelope
     task_id = envelope.get("invocation_id")
     submission = session.submission(task_id)
-    now = time.time()
-    if not submission or now - submission.get("sent_at", 0) < MODEL_AUTHORIZATION_RETRY_SECONDS:
+    if not submission:
         return envelope
-    session.remember_submission(task_id, submission["path"], submission["body"], sent_at=now)
+    due_in = submission.get("sent_at", 0) + MODEL_AUTHORIZATION_RETRY_SECONDS - time.time()
+    if due_in > 0:
+        if max_wait_seconds > 0:
+            time.sleep(min(due_in, max_wait_seconds))
+        if due_in > max_wait_seconds:
+            return envelope
+    session.remember_submission(task_id, submission["path"], submission["body"], sent_at=time.time())
     try:
         return cua_auth.authorized_call(
             state, base_url, "POST", submission["path"], body=submission["body"], timeout=_call_timeout(0)
@@ -2066,12 +2079,13 @@ def _model_authorization_next(next_hint, envelope, session):
     """Replace the gateway's advice to send the task again: the CLI does that itself."""
     if not _awaiting_model_authorization(envelope):
         return next_hint
-    if session.submission(envelope.get("invocation_id")):
-        return {**(next_hint or {}), "agent_hint": "CUA is waiting for model authorization; each check sends "
-                "the original request again to restore it. Keep checking; do not submit the task again."}
-    return {"agent_hint": "CUA lost model authorization and cannot continue this task, which was created "
-            "without a request this CLI can send again. Tell the user. The desktop stays busy until the "
-            "task ends; cancel it and submit the request again only if the user asks."}
+    if _cannot_restore_model_authorization(envelope, session):
+        return {"agent_hint": "CUA lost model authorization and cannot continue this task, which was created "
+                "without a request this CLI can send again. Tell the user. The desktop stays busy until the "
+                "task ends; cancel it and submit the request again only if the user asks."}
+    return {**(next_hint or {}), "agent_hint": "CUA is waiting for model authorization. Checking the task "
+            "restores it by sending the original request again; keep checking with next.command and do not "
+            "submit the task again."}
 
 
 # Gateway bookkeeping the calling agent does not act on, re-read on every later
