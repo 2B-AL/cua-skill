@@ -89,12 +89,12 @@ python3 <skill-dir>/scripts/cua.py timeline show (--context-id <id> | --last-con
 ## Artifacts
 
 ```bash
-python3 <skill-dir>/scripts/cua.py artifact list (--task-id <id> | --last)
+python3 <skill-dir>/scripts/cua.py artifact list [--task-id <id>]
 python3 <skill-dir>/scripts/cua.py artifact save (--artifact-id <id> | --last) \
   [--task-id <id>] [--output <new-path>]
 ```
 
-`artifact save` never overwrites an existing path and does not create a missing parent directory. Omit `--output` to use a secure temporary file. Downloads are limited to 256 MiB; HTML/interstitial content and missing artifacts are not written.
+Without `--task-id`, both commands use the latest task. `artifact save` never overwrites an existing path and does not create a missing parent directory. Omit `--output` to use a secure temporary file. Downloads are limited to 256 MiB; HTML/interstitial content and missing artifacts are not written.
 
 ## Browser login sync
 

@@ -72,7 +72,7 @@ MODEL_AUTHORIZATION_RETRY_SECONDS = 30
 USER_REPLY_HINT = ("CUA acts on the reply as the user's decision, so never answer it yourself; "
                    "if you cannot ask the user now, end your turn with the question.")
 COMPLETED_HINT = "data.result.text is the authoritative result; reply with it as returned."
-NO_LAST_TASK = ("No task has been recorded on this computer yet, so --last has nothing to use. "
+NO_LAST_TASK = ("No task has been recorded on this computer yet, so there is no latest task to use. "
                 "Pass --task-id <id> (the same id as --invocation-id) from the command that created the task.")
 CREDENTIAL_TARGET_PROTOCOL = "cua-target/v1"
 CREDENTIAL_RUNTIME = Path(__file__).resolve().parents[1]
@@ -746,7 +746,10 @@ def cmd_timeline_show(args, state, session):
 
 def cmd_artifact_list(args, state, session):
     base_url = resolve_base_url(args, state)
-    task_id = _resolve_task_id(args, session)
+    # Like artifact save, no task id means the latest task.
+    task_id = args.task_id or session.last_task_id
+    if not task_id:
+        raise SkillError("VALIDATION_ERROR", NO_LAST_TASK)
     data = cua_auth.authorized_call(
         state, base_url, "GET", f"/v1/tasks/{task_id}/artifacts", retries=IDEMPOTENT_RETRIES
     )
@@ -2430,7 +2433,7 @@ def _add_semantic_parsers(sub):
     # -- artifact --
     artifact = sub.add_parser("artifact", help="List and save task artifacts.").add_subparsers(dest="artifact_command")
 
-    p = artifact.add_parser("list", help="List artifacts produced by a task.")
+    p = artifact.add_parser("list", help="List artifacts produced by a task; the latest task unless --task-id is given.")
     _add_task_args(p)
     p.set_defaults(handler=cmd_artifact_list, action="artifact list")
 
