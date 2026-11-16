@@ -121,8 +121,10 @@ class GatewayCredentialTests(unittest.TestCase):
 
     def test_auth_status_names_the_gateway_the_login_serves(self):
         """An MCP client connects to this gateway's deployment, so the status says which one it is."""
-        cases = ((dict(api_base_url=DEV, api_key=SAVED_KEY, credential_source="manual"), {"url": DEV, "bundled": False}),
-                 (dict(api_key=SAVED_KEY, credential_source="manual"), {"url": AGENTPLAN, "bundled": True}))
+        cases = ((dict(api_base_url=DEV, api_key=SAVED_KEY, credential_source="manual"),
+                  {"url": DEV, "bundled": False, "source": "saved login"}),
+                 (dict(api_key=SAVED_KEY, credential_source="manual"),
+                  {"url": AGENTPLAN, "bundled": True, "source": "bundled config"}))
         for saved, expected in cases:
             state = self.state(**saved)
             args = cua.build_parser().parse_args(["auth", "status"])

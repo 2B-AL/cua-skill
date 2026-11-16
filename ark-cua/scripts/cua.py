@@ -53,7 +53,9 @@ from cua_util import (
     emit_error,
     emit_success,
     ext_for_mime,
+    gateway_in_use,
     login_setup_command,
+    note_gateway,
     now_epoch,
 )
 
@@ -70,6 +72,8 @@ MODEL_AUTHORIZATION_RETRY_SECONDS = 30
 # answered CUA's question itself.
 USER_REPLY_HINT = ("CUA acts on the reply as the user's decision, so never answer it yourself; "
                    "if you cannot ask the user now, end your turn with the question.")
+NO_LAST_TASK = ("No task has been recorded on this computer yet, so --last has nothing to use. "
+                "Pass --task-id <id> (the same id as --invocation-id) from the command that created the task.")
 CREDENTIAL_TARGET_PROTOCOL = "cua-target/v1"
 CREDENTIAL_RUNTIME = Path(__file__).resolve().parents[1]
 CREDENTIAL_PAIR_POLL_INTERVAL_SEC = 0.5
@@ -231,13 +235,15 @@ def _read_stdin_text(args):
 
 
 def resolve_base_url(args, state, persist=False):
-    base_url = (
-        args.api_base_url
-        or os.environ.get("AP_CUA_SKILL_API_BASE_URL")
-        or os.environ.get("CUA_SKILL_API_BASE_URL")
-        or state.api_base_url
-        or bundled_base_url()
+    # The first source that names a gateway wins; later ones are not read.
+    candidates = (
+        ("--api-base-url", lambda: args.api_base_url),
+        ("AP_CUA_SKILL_API_BASE_URL", lambda: os.environ.get("AP_CUA_SKILL_API_BASE_URL")),
+        ("CUA_SKILL_API_BASE_URL", lambda: os.environ.get("CUA_SKILL_API_BASE_URL")),
+        ("saved login", lambda: state.api_base_url),
+        ("bundled config", bundled_base_url),
     )
+    source, base_url = next(((name, value) for name, read in candidates if (value := read())), (None, None))
     if not base_url:
         raise SkillError(
             "VALIDATION_ERROR",
@@ -245,6 +251,7 @@ def resolve_base_url(args, state, persist=False):
             "pass --api-base-url, or set AP_CUA_SKILL_API_BASE_URL.",
         )
     base_url = _validate_base_url(base_url)
+    note_gateway(base_url, source)
     if persist and state.api_base_url != base_url:
         # One login is saved at a time. A login saved for another gateway is
         # removed here, so no later command sends it to this one.
@@ -291,7 +298,8 @@ def cmd_auth_status(args, state, session):
     base_url = resolve_base_url(args, state)
     data = cua_auth.auth_status(state, base_url)
     # Which gateway this login serves; an MCP client needs it (references/mcp.md).
-    data["gateway"] = {"url": base_url, "bundled": base_url == (bundled_base_url() or "").strip().rstrip("/")}
+    data["gateway"] = {"url": base_url, "bundled": base_url == (bundled_base_url() or "").strip().rstrip("/"),
+                       "source": gateway_in_use().get("source")}
     return {"data": data}
 
 
@@ -1767,6 +1775,8 @@ def _resolve_task_id(args, session):
         return args.task_id
     if getattr(args, "last", False) and session.last_task_id:
         return session.last_task_id
+    if getattr(args, "last", False):
+        raise SkillError("VALIDATION_ERROR", NO_LAST_TASK)
     raise SkillError(
         "VALIDATION_ERROR",
         "task_id is required. Pass --task-id <id> or --last to reuse the most recent task.",
@@ -1906,6 +1916,8 @@ def _resolve_invocation_id(args, session):
         return args.invocation_id
     if getattr(args, "last", False) and session.last_invocation_id:
         return session.last_invocation_id
+    if getattr(args, "last", False):
+        raise SkillError("VALIDATION_ERROR", NO_LAST_TASK)
     raise SkillError(
         "VALIDATION_ERROR",
         "invocation_id is required. Pass --invocation-id <id> or --last to reuse the most recent invocation.",

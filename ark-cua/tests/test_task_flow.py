@@ -124,6 +124,23 @@ class TaskFlowTests(unittest.TestCase):
         self.assertEqual([call[:2] for call in self.calls],
                          [("GET", "/v1/tasks/task_1"), ("POST", "/v1/contexts/ctx_1/tasks")])
 
+    def test_last_says_when_no_task_is_recorded(self):
+        for argv in (("watch", "--last"), ("task", "status", "--last")):
+            reply = self.run_cli(*argv)
+            self.assertEqual(reply["error"]["code"], "VALIDATION_ERROR")
+            self.assertIn("No task has been recorded", reply["error"]["message"])
+        self.assertEqual(self.calls, [])
+
+    def test_an_unreachable_gateway_names_its_address_and_where_it_came_from(self):
+        os.environ["AP_CUA_SKILL_API_BASE_URL"] = "http://127.0.0.1:9"
+        self.session_file.write_text(json.dumps({"last_invocation_id": "task_1"}))
+        refused = SkillError("NETWORK", "Cannot reach CUA gateway at http://127.0.0.1:9: Connection refused")
+        self.replies = {("POST", "/v1/invocations/task_1/watch"): [refused] * 3}
+        reply = self.run_cli("watch", "--last")
+        self.assertEqual(reply["error"]["gateway"], {"url": "http://127.0.0.1:9", "source": "AP_CUA_SKILL_API_BASE_URL"})
+        self.assertIn("Never print environment variables", reply["next"]["agent_hint"])
+        self.assertNotIn("not a real failure", reply["next"]["agent_hint"])
+
     def test_last_context_says_when_no_context_is_saved(self):
         reply = self.run_cli("task", "continue", "--last-context", "--objective", "继续")
         self.assertFalse(reply["ok"])
