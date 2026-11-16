@@ -27,7 +27,7 @@ Read [references/commands.md](references/commands.md) for non-core commands and 
 
 1. Run `auth status`. The CLI reuses a saved login or an eligible AgentPlan Max account from `arkcli`. If login is required, follow [references/auth.md](references/auth.md); the user enters any API key in their own terminal.
 2. If `data.real_name_verification.status` is `unverified`, provide `verification_url` before allocating a new desktop. Existing allocated desktops remain usable.
-3. Run `delegate --objective "<user request>"` once. Preserve the user's objective without planning or decomposing it.
+3. Run `delegate --objective "<user request>"` once. The objective of every CUA task (`delegate`, `task run`, `task continue`) is the user's request copied character for character. Keep its language, punctuation and quotation marks, and the words addressed to you, such as asking you to tell them the result, because CUA's answer reaches the user through you. Add no site, step or output format, not even in parentheses: CUA plans the work itself, and an added detail can steer it wrong. The only edit is removing local-delivery wording (see Local file delivery). A request that relies on an earlier task goes to that task's context with `task continue` instead of into a rewritten objective.
 4. Record `data.invocation_id`; never submit the same request again.
 5. Drive `data.outcome` until terminal:
    - `in_progress`: run `next.command` and continue watching.
