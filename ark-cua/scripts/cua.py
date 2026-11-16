@@ -15,7 +15,7 @@
 
 """AgentPlan CUA Skill CLI — the single entrypoint an agent calls to drive CUA.
 
-    python3 <skill_dir>/scripts/cua.py <command> [options]
+    python3 <skill-dir>/scripts/cua.py <command> [options]
 
 Every invocation prints exactly one JSON object:
 
@@ -43,7 +43,6 @@ import urllib.parse
 from pathlib import Path
 
 import cua_auth
-import cua_http
 from cua_state import AuthState, SessionState
 from cua_util import (
     RETRYABLE_ERROR_CODES,
@@ -1858,11 +1857,7 @@ def _next_for_task(envelope):
     if outcome == "in_progress":
         # task status answers at once, so polling it costs a turn every few seconds;
         # watch waits for the next outcome, and a task id is an invocation id.
-        return {
-            "command": f"{command} watch --invocation-id {task_id}",
-            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled; "
-            "each watch waits up to 20 seconds. Do not answer the task from progress.",
-        }
+        return _next_for_envelope(envelope)
     if outcome == "needs_input":
         return {
             "command": f"{command} task answer --task-id {task_id} --answer - <<'EOF'\n<USER_ANSWER>\nEOF",
@@ -2135,9 +2130,8 @@ def _next_for_envelope(envelope):
     if outcome == "in_progress":
         return {
             "command": f"{command} watch --invocation-id {invocation_id}",
-            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled. "
-            "Each watch returns quickly; just call it again while in_progress. For a hands-off wait, "
-            f"use `{command} result --invocation-id {invocation_id}`. Do not answer the task from progress.",
+            "agent_hint": hint or "Keep watching until completed, needs_input, failed, or cancelled; "
+            "each watch waits up to 20 seconds for the next outcome. Do not answer the task from progress.",
         }
     if outcome == "needs_input":
         return {

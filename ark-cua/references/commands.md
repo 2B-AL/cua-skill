@@ -1,8 +1,5 @@
 # ARK CUA Skill commands
 
-All commands: `python3 <skill_dir>/scripts/cua.py <command> [options]`.
-The CLI uses its bundled service address and the current login.
-
 ## Authentication and health
 
 ```bash
@@ -60,8 +57,6 @@ python3 scripts/cua.py model get
 
 If opening the URL fails, follow [troubleshooting.md](troubleshooting.md).
 
-The Skill intentionally excludes reboot/reset and persistent model modification. Shutdown and unified start/recovery are its supported mutating desktop lifecycle actions.
-
 ## Tasks and reusable contexts
 
 ```bash
@@ -82,12 +77,14 @@ python3 scripts/cua.py task cancel (--task-id <id> | --last)
 
 python3 scripts/cua.py context list
 python3 scripts/cua.py context create [--title "<title>"] [--desktop <id-or-name>]
-python3 scripts/cua.py context add-note (--context-id <id> | --last-context) --text "<background>"
+python3 scripts/cua.py context add-note (--context-id <id> | --last-context) --text - <<'EOF'
+<background>
+EOF
 python3 scripts/cua.py context show (--context-id <id> | --last-context)
 python3 scripts/cua.py timeline show (--context-id <id> | --last-context)
 ```
 
-Use the identifiers returned by each command. Relay CUA's questions and submit the user's replies; do not suppress or answer them on the user's behalf.
+`task run` can target a chosen desktop, and `task continue` adds a request to an existing context. The other `task` commands act on the same ids as the core commands: `task answer`, `task result` and `task cancel` do what `answer`, `result` and `cancel` do, and `task status` reads the current state without waiting. Use the identifiers returned by each command and follow `next.command`.
 
 ## Artifacts
 

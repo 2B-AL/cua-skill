@@ -60,8 +60,8 @@ AgentPlan gateway. See [authentication](ark-cua/references/auth.md) for account
 switching and gateway selection.
 
 The login and session are kept in `~/.ark-cua/` (`auth.json` and
-`session.json`). Releases before 1.3.2 used `~/.openclaw/ark-cua/`; the first
-run of this version moves those two files and leaves everything else under
+`session.json`). Earlier releases used `~/.openclaw/ark-cua/`; on its first run
+the current CLI moves those two files and leaves everything else under
 `~/.openclaw` alone. Both `AP_CUA_SKILL_*` and `CUA_SKILL_*` overrides remain
 supported for the API base URL, auth file and session file; with an auth or
 session file override set, nothing is moved. One login is saved per auth file;
@@ -71,9 +71,9 @@ task can be resumed after CUA loses model authorization; the entry is removed
 when the task ends.
 
 Available operations depend on the selected gateway's capabilities and
-authorization. Non-browser Credential Agent resource synchronization retains
-its existing `prod` environment and `agentplan_device` contract; changing the
-CUA gateway does not select a different Credential Agent environment. See
+authorization. Credential Agent resource sync (environment variables, Secrets,
+Credential Sets and managed files) always uses the production Credential Agent
+service with AgentPlan device sign-in, whichever CUA gateway is selected. See
 [commands](ark-cua/references/commands.md) and
 [credential resources](ark-cua/references/credentials.md).
 

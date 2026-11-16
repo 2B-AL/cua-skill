@@ -25,7 +25,7 @@ Permissions are repaired automatically (0700 for ~/.ark-cua, 0600 for the
 files); if repair fails the CLI refuses to continue so credentials are never
 left world-readable.
 
-Releases before 1.3.2 kept auth.json and session.json in ~/.openclaw/ark-cua.
+Earlier releases kept auth.json and session.json in ~/.openclaw/ark-cua.
 With none of the four variables set, the first run that finds them only
 there moves them into ~/.ark-cua. The move is an atomic rename on one
 filesystem; across filesystems it is a verified copy, then the original is

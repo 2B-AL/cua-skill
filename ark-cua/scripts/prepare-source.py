@@ -94,12 +94,6 @@ def json_result(completed):
     return {}
 
 
-def result_error_code(completed):
-    result = json_result(completed)
-    error = result.get("error") if isinstance(result.get("error"), dict) else {}
-    return str(error.get("code") or "").strip()
-
-
 def exact_browser_ready(status):
     return (
         status.get("connected") is True

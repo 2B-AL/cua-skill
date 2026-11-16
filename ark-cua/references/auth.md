@@ -10,10 +10,10 @@ Use the user's existing AgentPlan login. The CLI handles authentication; do not 
 
 ## Switch accounts
 
-When the user explicitly requests a different account or API key, ask them to run this in their own terminal:
+When the user explicitly requests a different account or API key, ask them to run this in their own terminal, with `<skill-dir>` replaced by this skill's directory:
 
 ```bash
-python3 scripts/cua.py auth login --manual
+python3 <skill-dir>/scripts/cua.py auth login --manual
 ```
 
 The user enters the key through a hidden prompt, not in chat, command arguments or environment variables. This login remains active until `auth logout`. If it is rejected, repeat the returned manual login flow rather than silently using another account.
@@ -43,7 +43,7 @@ If `real_name_verification.status` is `unverified` or an operation returns `VOLC
 
 ## Saved state
 
-The login is kept in `~/.ark-cua/auth.json` and the session in `~/.ark-cua/session.json`: 0600 files in a 0700 directory. `AP_CUA_SKILL_AUTH_FILE` or `CUA_SKILL_AUTH_FILE` and `AP_CUA_SKILL_SESSION_FILE` or `CUA_SKILL_SESSION_FILE` name other files. Releases before 1.3.2 used `~/.openclaw/ark-cua`. With none of these variables set, the first run moves those two files and nothing else. When both directories hold state, `~/.ark-cua` is used and a one-time notice says the old directory was left unchanged.
+The login is kept in `~/.ark-cua/auth.json` and the session in `~/.ark-cua/session.json`: 0600 files in a 0700 directory. `AP_CUA_SKILL_AUTH_FILE` or `CUA_SKILL_AUTH_FILE` and `AP_CUA_SKILL_SESSION_FILE` or `CUA_SKILL_SESSION_FILE` name other files. Earlier releases used `~/.openclaw/ark-cua`. With none of these variables set, the first run moves those two files and nothing else. When both directories hold state, `~/.ark-cua` is used and a one-time notice says the old directory was left unchanged.
 
 ## Logout
 
