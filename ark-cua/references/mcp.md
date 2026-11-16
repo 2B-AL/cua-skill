@@ -13,7 +13,7 @@ The client sends `Authorization: Bearer <key>` over Streamable HTTP. A 404 or 40
 
 The user gives the key to the client. Do not ask for it in chat or copy it from this Skill's saved login, because both expose it outside the client. Configure the client to read it from an environment variable that the user sets in their own terminal, for example `read -rs ARK_CUA_MCP_KEY && export ARK_CUA_MCP_KEY`, which also keeps it out of shell history. The variable must be set wherever the client runs.
 
-Claude Code expands the single-quoted variable each time it connects; `-s user` makes the server available in every project instead of only the current one:
+Claude Code expands the single-quoted variable each time it connects. Add `-s user` to make the server available in every project instead of only the current one:
 
 ```bash
 claude mcp add --transport http ark-cua '<endpoint>' --header 'Authorization: Bearer ${ARK_CUA_MCP_KEY}'

@@ -48,7 +48,6 @@ from cua_http import (
 )
 from cua_util import RETRYABLE_ERROR_CODES, SkillError, bundled_base_url, login_setup_command, same_gateway
 
-DEFAULT_LOGIN_TIMEOUT_SEC = 0
 ARKCLI_TIMEOUT_SEC = 20
 ARKCLI_SKILL_NAME = "ark-cua"
 ARKCLI_STATE_FILES = ("config.yaml", "profile.yaml", ".env")

@@ -9,7 +9,7 @@ Use the current login and the user's selected desktops and websites. CookieCloud
 1. Check results first, without Chrome:
 
    ```bash
-   python3 scripts/cua.py browser-sync --desktop-id <id> [--desktop-id <another-id>] --domain <full-domain> [--wait-seconds 60]
+   python3 <skill-dir>/scripts/cua.py browser-sync --desktop-id <id> [--desktop-id <another-id>] --domain <full-domain> [--wait-seconds 60]
    ```
 
    Repeat `--domain` for each selected website and `--desktop-id` for each selected desktop, or use `--all-desktops` when the user wants every ready desktop of this login; desktops that are not ready are listed in `data.skipped_desktops`. A desktop that is not yet receiving joins the connection this computer's extension uploads to, with no Chrome change. With several desktops, `data.desktops` holds each desktop's result and `data.status` is the least finished one. Act on `data.status`:
@@ -19,7 +19,7 @@ Use the current login and the user's selected desktops and websites. CookieCloud
 2. Configure the extension only when step 1 requires it or the user asks for a change. The user installs the official [CookieCloud Chrome extension](https://chromewebstore.google.com/detail/cookiecloud/ffjiejobkoibkjlhjnlgmcnnigeelbdl) in their local Chrome and signs in to the selected websites. This needs Node.js 22+ and an authorized local Chrome debugging address: in Chrome 144+, the user enables `chrome://inspect/#remote-debugging` and approves the connection prompt. Reuse this browser and its login state.
 
    ```bash
-   python3 scripts/cua.py browser-sync --desktop-id <id> [--desktop-id <another-id>] \
+   python3 <skill-dir>/scripts/cua.py browser-sync --desktop-id <id> [--desktop-id <another-id>] \
      --cdp-url <authorized-local-address> --domain <full-domain> [--with-storage]
    ```
 
@@ -39,10 +39,10 @@ The local computer is the source and the requested cloud desktop is the target. 
 3. Run one exact resource command:
 
    ```bash
-   python3 scripts/cua.py credentials sync env --desktop-id <id> <name>...
-   python3 scripts/cua.py credentials sync secret --desktop-id <id> <name>...
-   python3 scripts/cua.py credentials sync credential-set --desktop-id <id> --type <type> --name <name>
-   python3 scripts/cua.py credentials sync file --desktop-id <id> --profile <profile>
+   python3 <skill-dir>/scripts/cua.py credentials sync env --desktop-id <id> <name>...
+   python3 <skill-dir>/scripts/cua.py credentials sync secret --desktop-id <id> <name>...
+   python3 <skill-dir>/scripts/cua.py credentials sync credential-set --desktop-id <id> --type <type> --name <name>
+   python3 <skill-dir>/scripts/cua.py credentials sync file --desktop-id <id> --profile <profile>
    ```
 
 4. Report the delivery result and any Job ID. A timeout or failure does not prove that nothing was delivered; do not submit the same delivery again blindly.
@@ -61,7 +61,7 @@ If an Agent prompt cannot run interactively, ask the user to run the same comman
 ## Reset Credential Agent
 
 ```bash
-python3 scripts/cua.py credentials reset --desktop-id <id> [--device-id <exact-id>]
+python3 <skill-dir>/scripts/cua.py credentials reset --desktop-id <id> [--device-id <exact-id>]
 ```
 
 Reset only the requested desktop's Agent. The command must confirm revocation of the exact target Device ID before resetting it; if revocation is unconfirmed, stop. CookieCloud browser sync is managed independently.
