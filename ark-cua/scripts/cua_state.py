@@ -15,13 +15,25 @@
 """Local caches for the AgentPlan CUA Skill CLI.
 
 `AuthState` stores the API base URL, user identity, and AgentPlan API key in
-a 0600 file at ~/.openclaw/ark-cua/auth.json (override with
-AP_CUA_SKILL_AUTH_FILE).
-`SessionState` remembers the last invocation id so weak agents can run
-`watch --last`. Permissions are repaired automatically; if repair fails the CLI
-refuses to continue so credentials are never left world-readable.
+a 0600 file at ~/.ark-cua/auth.json (override with AP_CUA_SKILL_AUTH_FILE or
+CUA_SKILL_AUTH_FILE). `SessionState` remembers the last invocation id so weak
+agents can run `watch --last`; its file sits beside auth.json unless
+AP_CUA_SKILL_SESSION_FILE or CUA_SKILL_SESSION_FILE names another one.
+Permissions are repaired automatically (0700 for ~/.ark-cua, 0600 for the
+files); if repair fails the CLI refuses to continue so credentials are never
+left world-readable.
+
+Releases before 1.3.2 kept auth.json and session.json in ~/.openclaw/ark-cua.
+With none of the four variables set, the first run that finds them only
+there moves them into ~/.ark-cua. The move is an atomic rename on one
+filesystem; across filesystems it is a verified copy, then the original is
+removed. When both directories hold state, ~/.ark-cua is used, the old one is
+left as it is, and the output says so once. A move that fails stops the CLI
+with STATE_MIGRATION_FAILED rather than starting from an empty login. Nothing
+else under ~/.openclaw is touched.
 """
 
+import errno
 import json
 import os
 import stat
@@ -30,11 +42,15 @@ import time
 import uuid
 from pathlib import Path
 
-from cua_util import SkillError
+from cua_util import SkillError, add_notice
 
-DEFAULT_DIR = Path.home() / ".openclaw" / "ark-cua"
-DEFAULT_AUTH_FILE = DEFAULT_DIR / "auth.json"
-DEFAULT_SESSION_FILE = DEFAULT_DIR / "session.json"
+DEFAULT_DIR = Path.home() / ".ark-cua"
+LEGACY_DIR = Path.home() / ".openclaw" / "ark-cua"
+# The login moves first, so a failure never leaves it behind while the session moves.
+STATE_FILES = ("auth.json", "session.json")
+_OVERRIDES = ("AP_CUA_SKILL_AUTH_FILE", "CUA_SKILL_AUTH_FILE",
+              "AP_CUA_SKILL_SESSION_FILE", "CUA_SKILL_SESSION_FILE")
+_LEGACY_NOTICE_MARKER = ".legacy-state-noticed"
 
 
 def _credential_state_key(environment_id, *parts):
@@ -54,7 +70,10 @@ def _credential_state_key(environment_id, *parts):
 
 def auth_file_path():
     override = os.environ.get("AP_CUA_SKILL_AUTH_FILE") or os.environ.get("CUA_SKILL_AUTH_FILE")
-    return Path(override).expanduser() if override else DEFAULT_AUTH_FILE
+    if override:
+        return Path(override).expanduser()
+    _prepare_default_dir()
+    return DEFAULT_DIR / "auth.json"
 
 
 def session_file_path():
@@ -62,6 +81,103 @@ def session_file_path():
     if override:
         return Path(override).expanduser()
     return auth_file_path().parent / "session.json"
+
+
+def _prepare_default_dir():
+    """Choose between DEFAULT_DIR and LEGACY_DIR as the module docstring describes."""
+    if any(os.environ.get(name) for name in _OVERRIDES):
+        return
+    current = [name for name in STATE_FILES if (DEFAULT_DIR / name).exists()]
+    legacy = [name for name in STATE_FILES if (LEGACY_DIR / name).exists()]
+    if current:
+        _ensure_private_dir(DEFAULT_DIR)
+        if legacy:
+            _notice_legacy_state_once()
+    elif legacy:
+        _migrate(legacy)
+    elif DEFAULT_DIR.exists():
+        _ensure_private_dir(DEFAULT_DIR)
+
+
+def _migrate(names):
+    try:
+        _ensure_private_dir(DEFAULT_DIR)
+        for name in names:
+            _move(LEGACY_DIR / name, DEFAULT_DIR / name)
+    except (OSError, SkillError) as exc:
+        reason = exc.message if isinstance(exc, SkillError) else str(exc)
+        raise SkillError(
+            "STATE_MIGRATION_FAILED",
+            f"Could not move the saved login from {_shown(LEGACY_DIR)} to {_shown(DEFAULT_DIR)}: {reason}. "
+            "Nothing was logged out: a file that did not move is still in the old directory. "
+            "Fix the cause and run the command again.",
+            legacy_dir=str(LEGACY_DIR),
+            state_dir=str(DEFAULT_DIR),
+        ) from exc
+
+
+def _move(src, dst):
+    try:
+        os.rename(src, dst)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        _copy_verified(src, dst)
+        try:
+            os.unlink(src)
+        except OSError as unlink_exc:
+            raise OSError(unlink_exc.errno, f"{dst.name} was copied, but the original could not be removed "
+                                            f"({unlink_exc.strerror})") from unlink_exc
+    _ensure_secure_permissions(dst)
+
+
+def _copy_verified(src, dst):
+    """Copy across filesystems into a private temporary file, compare, then put it in place."""
+    data = src.read_bytes()
+    fd, tmp = tempfile.mkstemp(dir=str(dst.parent), prefix=".tmp-", suffix=dst.suffix)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        if Path(tmp).read_bytes() != data:
+            raise OSError(errno.EIO, f"the copy of {src.name} does not match the original")
+        os.replace(tmp, dst)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _notice_legacy_state_once():
+    marker = DEFAULT_DIR / _LEGACY_NOTICE_MARKER
+    if marker.exists():
+        return
+    add_notice(f"Using the ark-cua state in {_shown(DEFAULT_DIR)}. {_shown(LEGACY_DIR)} still holds auth.json "
+               "or session.json from an earlier release and was left unchanged.")
+    try:
+        marker.touch(mode=0o600)
+    except OSError:
+        pass  # The notice repeats on a later run; nothing else reads the marker.
+
+
+def _ensure_private_dir(path):
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            os.chmod(path, 0o700)
+            if stat.S_IMODE(path.stat().st_mode) & 0o077:
+                raise SkillError("INTERNAL", f"{path} has unsafe permissions and could not be repaired")
+    except OSError as exc:
+        raise SkillError("INTERNAL", f"Cannot prepare {path}: {exc}")
+
+
+def _shown(path):
+    """A path as the user knows it: relative to the home directory when it is inside it."""
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 class _JsonFile:
