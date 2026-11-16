@@ -4,23 +4,28 @@ CUA serves the desktop's tools to MCP clients, so an agent can operate the deskt
 
 ## Connect a client
 
-- **Endpoint:** `<gateway>/mcp`, Streamable HTTP. For the bundled AgentPlan gateway, `<gateway>` is `api_base_url` in [assets/config.json](../assets/config.json). Another deployment's operator provides its endpoint; a 404 or 405 at `/mcp` means that deployment has not enabled it.
-- **Credential:** `Authorization: Bearer <account API key>`. On AgentPlan this is the user's AgentPlan API key, the one this Skill logs in with; other deployments issue their own keys. Anything else, such as an environment token, gets 401 `invalid_token`.
-- **Key handling:** the user gives the key to the client. Do not ask for it in chat or copy it from this Skill's saved login, because both expose it outside the client. Configure the client to read it from an environment variable that the user sets in their own terminal, for example `read -rs ARK_CUA_MCP_KEY && export ARK_CUA_MCP_KEY`, which also keeps it out of shell history. The endpoint refuses credentials in the URL.
+`auth status` names the gateway this Skill uses in `data.gateway`; the endpoint and key depend on it:
+
+- **Bundled AgentPlan gateway** (`bundled: true`): the endpoint is `<url>/mcp`, and the key is the user's AgentPlan API key, the one this Skill logs in with.
+- **Another deployment** (`bundled: false`, such as a development environment): its operator provides the endpoint and issues account API keys. Do not derive the endpoint from `url`, because such a deployment may serve MCP on another origin. An environment token, which development logins of this Skill often use, gets 401 `invalid_token`.
+
+The client sends `Authorization: Bearer <key>` over Streamable HTTP. A 404 or 405 at `/mcp` means that deployment has not enabled the endpoint. The endpoint refuses credentials in the URL.
+
+The user gives the key to the client. Do not ask for it in chat or copy it from this Skill's saved login, because both expose it outside the client. Configure the client to read it from an environment variable that the user sets in their own terminal, for example `read -rs ARK_CUA_MCP_KEY && export ARK_CUA_MCP_KEY`, which also keeps it out of shell history.
 
 Claude Code expands the single-quoted variable each time it connects:
 
 ```bash
-claude mcp add --transport http ark-cua '<gateway>/mcp' --header 'Authorization: Bearer ${ARK_CUA_MCP_KEY}'
+claude mcp add --transport http ark-cua '<endpoint>' --header 'Authorization: Bearer ${ARK_CUA_MCP_KEY}'
 ```
 
 Codex reads the variable named here:
 
 ```bash
-codex mcp add ark-cua --url '<gateway>/mcp' --bearer-token-env-var ARK_CUA_MCP_KEY
+codex mcp add ark-cua --url '<endpoint>' --bearer-token-env-var ARK_CUA_MCP_KEY
 ```
 
-A gateway with a self-signed certificate also needs the client to trust its CA: `NODE_EXTRA_CA_CERTS` for Claude Code, `CODEX_CA_CERTIFICATE` for Codex.
+An endpoint with a self-signed certificate also needs the client to trust its CA: `NODE_EXTRA_CA_CERTS` for Claude Code, `CODEX_CA_CERTIFICATE` for Codex.
 
 ## Session contract
 

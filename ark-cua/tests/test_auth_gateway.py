@@ -119,6 +119,20 @@ class GatewayCredentialTests(unittest.TestCase):
         self.assertFalse(cua_auth.saved_for_gateway(state, AGENTPLAN))
         self.assertNotIn(SAVED_KEY, json.dumps(result))
 
+    def test_auth_status_names_the_gateway_the_login_serves(self):
+        """An MCP client connects to this gateway's deployment, so the status says which one it is."""
+        cases = ((dict(api_base_url=DEV, api_key=SAVED_KEY, credential_source="manual"), {"url": DEV, "bundled": False}),
+                 (dict(api_key=SAVED_KEY, credential_source="manual"), {"url": AGENTPLAN, "bundled": True}))
+        for saved, expected in cases:
+            state = self.state(**saved)
+            args = cua.build_parser().parse_args(["auth", "status"])
+            with patch.dict(cua.os.environ, {}, clear=True), \
+                    patch.object(cua_auth, "gateway_call", side_effect=self.gateway), \
+                    patch.object(cua_auth, "_arkcli_credential", side_effect=AssertionError("arkcli must not be used")):
+                data = cua.cmd_auth_status(args, state, None)["data"]
+            self.assertEqual((data["status"], data["gateway"]), ("logged_in", expected))
+            self.assertNotIn(SAVED_KEY, json.dumps(data))
+
     def test_logout_returns_to_the_bundled_gateway(self):
         state = self.state(api_base_url=DEV, api_key=SAVED_KEY, credential_source="manual")
         cua_auth.logout(state, DEV)
