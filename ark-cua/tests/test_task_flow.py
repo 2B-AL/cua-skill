@@ -202,6 +202,18 @@ class TaskFlowTests(unittest.TestCase):
         self.assertIn("artifact save --task-id task_1 --artifact-id art_1", reply["next"]["command"])
         self.assertNotIn("agent_hint", reply["data"])
 
+    def test_artifacts_of_the_latest_task_are_listed_without_an_id(self):
+        # Like artifact save, artifact list falls back to the latest task.
+        self.session_file.write_text(json.dumps({"last_task_id": "task_2", "last_invocation_id": "task_2"}))
+        self.replies = {("GET", "/v1/tasks/task_2/artifacts"): {"task_id": "task_2", "artifacts": []}}
+        self.assertTrue(self.run_cli("artifact", "list")["ok"])
+        self.assertEqual(self.calls, [("GET", "/v1/tasks/task_2/artifacts", None)])
+        self.session_file.write_text("{}")
+        reply = self.run_cli("artifact", "list")
+        self.assertEqual(reply["error"]["code"], "VALIDATION_ERROR")
+        self.assertIn("No task has been recorded", reply["error"]["message"])
+        self.assertEqual(len(self.calls), 1)
+
     def test_saving_the_last_artifact_says_when_none_is_saved(self):
         reply = self.run_cli("artifact", "save", "--last")
         self.assertEqual(reply["error"]["code"], "VALIDATION_ERROR")
