@@ -15,7 +15,7 @@ Do the user's cloud-computer work through the bundled Python CLI, with its defau
 python3 <skill-dir>/scripts/cua.py <command> [options]
 ```
 
-The references shorten this to `python3 scripts/cua.py`. Each invocation prints one JSON object:
+Each invocation prints one JSON object:
 
 - Success: `ok: true`, with `data` and sometimes `next`.
 - Failure: `ok: false`, with `error.code` and sometimes `next.setup_command`.
