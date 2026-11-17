@@ -33,12 +33,12 @@ Each invocation prints one JSON object:
    EOF
    ```
 
-   The objective of every CUA task (`delegate`, `task run`, `task continue`) is the user's whole request, copied character for character:
+   The objective of every CUA task (`delegate`, `task run`, `task continue`) is what the user wants done, copied character for character:
    - Keep its language, punctuation and quotation marks.
    - Keep the words addressed to you, such as asking you to tell them the result: CUA's answer reaches the user through you.
    - Keep the parts you could answer yourself: CUA answers them from what it sees on the desktop.
    - Add no site, step or output format, not even in parentheses: CUA plans the work itself, and an added detail can steer it wrong.
-   - The only edit is removing local-delivery wording (see Local file delivery).
+   - Leave out only what is meant for this computer, which CUA cannot see or act on: the call to this skill, such as `$ark-cua`, a link to this file or 使用 ark-cua, and local-delivery wording (see Local file delivery). Words about CUA or the cloud computer belong to the task; keep them.
 
    `delegate` checks the login itself and waits up to 20 seconds, so a short task returns its result in this call. A login error such as `AUTH_REQUIRED` carries a `setup_command` for the user's own terminal; follow [references/auth.md](references/auth.md). `VOLCENGINE_REAL_NAME_REQUIRED` carries a `verification_url` for the user.
 2. Keep `data.invocation_id` and never submit the same request again. `data.wait_interrupted` means only the wait failed: the task exists, so continue with `next.command`.
