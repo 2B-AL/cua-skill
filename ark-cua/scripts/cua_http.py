@@ -234,7 +234,7 @@ def _raise_gateway_error(status, payload):
         raise SkillError("GATEWAY_TIMEOUT", "Gateway timed out (HTTP 504); the task is likely still running.")
     if status in (502, 503):
         raise SkillError("CUA_BACKEND_UNAVAILABLE", f"Gateway/backend unavailable (HTTP {status}).")
-    raise SkillError("INTERNAL", f"Unexpected non-JSON gateway response (HTTP {status})")
+    raise SkillError("INTERNAL", f"Unexpected non-JSON gateway response (HTTP {status})", http_status=status)
 
 
 def _headers_dict(response):

@@ -418,9 +418,23 @@ def cmd_desktop_list(args, state, session):
     return {"data": data}
 
 
+def _desktop_spec_call(state, base_url, method, path, **kwargs):
+    try:
+        return cua_auth.authorized_call(state, base_url, method, path, **kwargs)
+    except SkillError as exc:
+        if exc.http_status == 404 or exc.code == "DataRouteNotRegistered":
+            raise SkillError(
+                "DESKTOP_SPEC_SELECTION_UNSUPPORTED",
+                "Desktop spec selection is unavailable at this gateway. "
+                "Use desktop start if the user chooses the default desktop.",
+                **exc.extra,
+            ) from exc
+        raise
+
+
 def cmd_desktop_specs(args, state, session):
     base_url = resolve_base_url(args, state)
-    data = cua_auth.authorized_call(
+    data = _desktop_spec_call(
         state, base_url, "GET", "/v1/desktop-specs", retries=IDEMPOTENT_RETRIES,
     )
     return {"data": data, "next": {"agent_hint": (
@@ -431,7 +445,7 @@ def cmd_desktop_specs(args, state, session):
 
 def cmd_desktop_allocate(args, state, session):
     base_url = resolve_base_url(args, state)
-    data = cua_auth.authorized_call(
+    data = _desktop_spec_call(
         state, base_url, "POST", "/v1/desktop-allocations",
         body={"spec_code": args.spec, "idempotency_key": args.idempotency_key},
     )
@@ -632,19 +646,20 @@ def cmd_desktop_operation(args, state, session):
             "from data.status and data.operation."
         )
         if sandbox_id and status == "succeeded":
-            _, raw = cua_auth.authorized_raw_call(
-                state, base_url, "GET", "/v1/sandboxes/" + urllib.parse.quote(sandbox_id, safe=""),
-                retries=IDEMPOTENT_RETRIES,
-            )
             try:
-                expires_at = json.loads(raw).get("lifecycle", {}).get("hardExpiresAt")
-            except (ValueError, AttributeError) as exc:
-                raise SkillError("UPSTREAM_PROTOCOL_ERROR", "Invalid sandbox lifecycle response.") from exc
-            if expires_at is not None and not isinstance(expires_at, str):
-                raise SkillError("UPSTREAM_PROTOCOL_ERROR", "Invalid sandbox lease expiry.")
-            if expires_at:
-                data["expires_at"] = expires_at
-                hint += " Tell the user when the desktop lease expires."
+                _, raw = cua_auth.authorized_raw_call(
+                    state, base_url, "GET", "/v1/sandboxes/" + urllib.parse.quote(sandbox_id, safe=""),
+                    retries=IDEMPOTENT_RETRIES,
+                )
+                expires_at = json.loads(raw)["lifecycle"]["hardExpiresAt"]
+                if expires_at is not None and (not isinstance(expires_at, str) or not expires_at.strip()):
+                    raise ValueError("Invalid sandbox lease expiry.")
+            except (SkillError, ValueError, KeyError, TypeError):
+                hint = "The desktop is ready. Its lease expiry could not be read."
+            else:
+                if expires_at:
+                    data["expires_at"] = expires_at
+                    hint += " Tell the user when the desktop lease expires."
         return {"data": data, "next": {"agent_hint": hint}}
     return {"data": data, "next": {
         "command": _desktop_operation_command(args, args.operation_id, sandbox_id),

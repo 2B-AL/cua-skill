@@ -167,6 +167,67 @@ class TaskFlowTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "UPSTREAM_PROTOCOL_ERROR")
 
+    def test_desktop_spec_commands_explain_missing_gateway_routes(self):
+        commands = [
+            ("GET", "/v1/desktop-specs", ["specs"], None),
+            ("POST", "/v1/desktop-allocations",
+             ["allocate", "--spec", "windows-8c16g", "--idempotency-key", "allocate-example"],
+             {"spec_code": "windows-8c16g", "idempotency_key": "allocate-example"}),
+        ]
+        for method, path, arguments, body in commands:
+            for response in ({}, {"error": {"code": "DataRouteNotRegistered"}}):
+                with self.subTest(path=path, response=response):
+                    with self.assertRaises(SkillError) as rejected:
+                        cua_http._raise_gateway_error(404, response)
+                    self.replies = {(method, path): rejected.exception}
+                    self.calls.clear()
+
+                    result = self.run_cli("desktop", *arguments)
+
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["error"]["code"], "DESKTOP_SPEC_SELECTION_UNSUPPORTED")
+                    self.assertIn("desktop start", result["error"]["message"])
+                    self.assertEqual(self.calls, [(method, path, body)])
+
+    def test_desktop_allocate_preserves_a_spec_not_available_error(self):
+        with self.assertRaises(SkillError) as rejected:
+            cua_http._raise_gateway_error(
+                404, {"error": {"code": "SPEC_NOT_AVAILABLE"}, "request_id": "req-example"},
+            )
+        self.replies = {("POST", "/v1/desktop-allocations"): rejected.exception}
+
+        result = self.run_cli("desktop", "allocate", "--spec", "windows-8c16g", "--idempotency-key", "allocate-example")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "SPEC_NOT_AVAILABLE")
+        self.assertEqual(result["error"]["request_id"], "req-example")
+
+    def test_desktop_operation_preserves_success_when_lease_expiry_cannot_be_read(self):
+        operation = "/v1/desktop/operations/op-example"
+        sandbox = "/v1/sandboxes/sbi-example"
+        cases = [
+            ("refused", SkillError("FORBIDDEN", "Sandbox read refused."), True),
+            ("malformed", ({}, b"invalid JSON"), True),
+            ("missing field", ({}, b'{"lifecycle":{}}'), True),
+            ("invalid expiry", ({}, b'{"lifecycle":{"hardExpiresAt":42}}'), True),
+            ("no lease", ({}, b'{"lifecycle":{"hardExpiresAt":null}}'), False),
+        ]
+        for name, response, lookup_failed in cases:
+            with self.subTest(response=name):
+                self.replies = {
+                    ("GET", operation): {"status": "succeeded", "terminal": True},
+                    ("GET", sandbox): response,
+                }
+                with patch.object(cua.cua_auth, "_authorized_raw_call_once", side_effect=self.gateway):
+                    result = self.run_cli("desktop", "operation", "--operation-id", "op-example",
+                                          "--sandbox-id", "sbi-example")
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["data"]["status"], "succeeded")
+                self.assertTrue(result["data"]["terminal"])
+                self.assertNotIn("expires_at", result["data"])
+                self.assertEqual("lease expiry could not be read" in result["next"]["agent_hint"], lookup_failed)
+
     def test_desktop_operation_read_skips_lease_for_legacy_or_failed_operations(self):
         operation = "/v1/desktop/operations/op-example"
         cases = [([], "succeeded"), (["--sandbox-id", "sbi-example"], "failed")]
