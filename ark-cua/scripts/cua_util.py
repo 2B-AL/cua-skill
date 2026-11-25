@@ -49,12 +49,16 @@ class SkillError(Exception):
     DESKTOP_UNHEALTHY, SESSION_CLEANUP, UPSTREAM_FAILURE,
     CUA_BACKEND_UNAVAILABLE, RATE_LIMITED, VALIDATION_ERROR, NETWORK, INTERNAL),
     plus the local STATE_MIGRATION_FAILED.
+
+    `http_status` lets callers inspect an unrecognized HTTP response without
+    adding transport fields to the public error envelope.
     """
 
-    def __init__(self, code, message, **extra):
+    def __init__(self, code, message, *, http_status=None, **extra):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.http_status = http_status
         self.extra = {k: v for k, v in extra.items() if v is not None}
 
 

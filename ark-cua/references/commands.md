@@ -32,10 +32,12 @@ Call `delegate` once and follow `next.command` until a terminal outcome. `delega
 
 Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `task continue --task-id <id>` for an earlier one.
 
-## Desktop inspection, screenshots, start/recovery, shutdown, and CUA App access
+## Desktop inspection, screenshots, allocation, lifecycle, and CUA App access
 
 ```bash
 python3 <skill-dir>/scripts/cua.py desktop list
+python3 <skill-dir>/scripts/cua.py desktop specs
+python3 <skill-dir>/scripts/cua.py desktop allocate --spec <code> --idempotency-key <stable-unique-key>
 python3 <skill-dir>/scripts/cua.py desktop access [--desktop <id>]
 python3 <skill-dir>/scripts/cua.py desktop screenshot [--desktop <id>] [--output <new-path>]
 python3 <skill-dir>/scripts/cua.py desktop revoke-access (--ticket <ticket> | --access-url <url>)
@@ -43,9 +45,20 @@ python3 <skill-dir>/scripts/cua.py desktop start --idempotency-key <stable-uniqu
   [--desktop <id>]
 python3 <skill-dir>/scripts/cua.py desktop shutdown --confirm --idempotency-key <stable-unique-key> \
   [--desktop <id>]
-python3 <skill-dir>/scripts/cua.py desktop operation --operation-id <id>
+python3 <skill-dir>/scripts/cua.py desktop operation --operation-id <id> [--sandbox-id <id>]
 python3 <skill-dir>/scripts/cua.py model get
 ```
+
+`desktop specs` reads the specs the current login can request. Use `data.available_specs` for the spec codes, operating systems, and availability at the time of the query. For a spec with `user_stop_policy=release`, explain the lease duration and that shutdown or expiry ends the lease and discards data on that desktop.
+
+`desktop allocate` requests the exact spec the user selected. Reuse the same idempotency key for a retry of that request and follow `next.command` until the original operation is terminal. On success, report `data.expires_at` when the gateway supplies a lease deadline. If the lease lookup fails, report that the desktop is ready and its lease expiry is unavailable.
+
+- `DESKTOP_ALREADY_EXISTS` — Use `desktop list` to show the existing desktop. Changing specs requires releasing it and may discard its data. Let the user decide whether to release it.
+- `QUOTA_EXCEEDED` — Tell the user that the account has reached its desktop quota.
+- `SPEC_NOT_AVAILABLE` — Refresh the available specs with `desktop specs` so the user can choose an available code.
+- `SPEC_TEMPORARILY_UNAVAILABLE` — Report the capacity shortage. Keep the same spec and idempotency key for any retry the user requests.
+- `IDEMPOTENCY_CONFLICT` — Check the original request. Use a new key only for a separate allocation the user approves.
+- `DESKTOP_SPEC_SELECTION_UNSUPPORTED` — Explain that the current gateway lacks spec selection. Use `desktop start` if the user chooses the default desktop.
 
 `desktop shutdown` requires an explicit request to shut down, release or stop billing. It ends billing, revokes access and interrupts active tasks; the desktop is then stopped or deleted according to retention policy. If the user wants current work to finish first, wait for that task's terminal outcome. Include `--confirm`, reuse one stable idempotency key for retries, and follow `next.command` until terminal. When `data.operation.recoverable` is true, retain `data.desktop.desktop_id` and the `data.operation.purge_after` recovery deadline.
 
