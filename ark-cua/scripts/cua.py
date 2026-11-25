@@ -33,6 +33,7 @@ import json
 import os
 import queue
 import secrets
+import shlex
 import stat
 import subprocess
 import sys
@@ -56,6 +57,7 @@ from cua_util import (
     login_setup_command,
     note_gateway,
     now_epoch,
+    script_path,
 )
 
 # Long tasks use repeated waits. Each request stays within the gateway's 60-second
@@ -416,6 +418,32 @@ def cmd_desktop_list(args, state, session):
     return {"data": data}
 
 
+def cmd_desktop_specs(args, state, session):
+    base_url = resolve_base_url(args, state)
+    data = cua_auth.authorized_call(
+        state, base_url, "GET", "/v1/desktop-specs", retries=IDEMPOTENT_RETRIES,
+    )
+    return {"data": data, "next": {"agent_hint": (
+        "Show the spec codes, operating systems and current availability. For a spec with "
+        "user_stop_policy=release, explain its lease and that shutdown releases the desktop."
+    )}}
+
+
+def cmd_desktop_allocate(args, state, session):
+    base_url = resolve_base_url(args, state)
+    data = cua_auth.authorized_call(
+        state, base_url, "POST", "/v1/desktop-allocations",
+        body={"spec_code": args.spec, "idempotency_key": args.idempotency_key},
+    )
+    operation_id, sandbox_id = data.get("operation_id"), data.get("sandbox_id")
+    if not all(isinstance(value, str) and value for value in (operation_id, sandbox_id)):
+        raise SkillError("UPSTREAM_PROTOCOL_ERROR", "The allocation response is missing its operation or sandbox ID.")
+    return {"data": data, "next": {
+        "command": _desktop_operation_command(args, operation_id, sandbox_id),
+        "agent_hint": "Check this allocation operation until it is terminal. Reuse the same idempotency key on retry.",
+    }}
+
+
 class _ExtensionRecord:
     """This computer's record of the connection its CookieCloud extension uploads to, for one Gateway."""
 
@@ -522,6 +550,16 @@ def cmd_desktop_revoke_access(args, state, session):
     }}
 
 
+def _desktop_operation_command(args, operation_id, sandbox_id=None):
+    command = ["python3", script_path()]
+    if args.api_base_url:
+        command.extend(["--api-base-url", args.api_base_url])
+    command.extend(["desktop", "operation", "--operation-id", operation_id])
+    if sandbox_id:
+        command.extend(["--sandbox-id", sandbox_id])
+    return shlex.join(command)
+
+
 def cmd_desktop_shutdown(args, state, session):
     base_url = resolve_base_url(args, state)
     body = {
@@ -543,9 +581,7 @@ def cmd_desktop_shutdown(args, state, session):
         "retention deadline.",
     }
     if operation_id:
-        next_action["command"] = (
-            f"{command_prefix()} desktop operation --operation-id {operation_id}"
-        )
+        next_action["command"] = _desktop_operation_command(args, operation_id)
     return {"data": data, "next": next_action}
 
 
@@ -562,7 +598,7 @@ def cmd_desktop_start(args, state, session):
     action = data.get("action") or "start"
     if operation_id:
         return {"data": data, "next": {
-            "command": f"{command_prefix()} desktop operation --operation-id {operation_id}",
+            "command": _desktop_operation_command(args, operation_id),
             "agent_hint": (
                 f"Desktop {action} is in progress. Keep checking this logical operation until it "
                 "is terminal; only succeeded means the desktop and its required access and "
@@ -579,26 +615,42 @@ def cmd_desktop_start(args, state, session):
 
 def cmd_desktop_operation(args, state, session):
     base_url = resolve_base_url(args, state)
+    operation_id = urllib.parse.quote(args.operation_id, safe="")
     data = cua_auth.authorized_call(
         state,
         base_url,
         "GET",
-        f"/v1/desktop/operations/{args.operation_id}",
+        f"/v1/desktop/operations/{operation_id}",
         retries=IDEMPOTENT_RETRIES,
     )
     status = data.get("status")
     terminal = data.get("terminal") is True
+    sandbox_id = args.sandbox_id
     if terminal:
         hint = (
             "The desktop lifecycle operation is terminal. Report whether it succeeded or failed "
             "from data.status and data.operation."
         )
+        if sandbox_id and status == "succeeded":
+            _, raw = cua_auth.authorized_raw_call(
+                state, base_url, "GET", "/v1/sandboxes/" + urllib.parse.quote(sandbox_id, safe=""),
+                retries=IDEMPOTENT_RETRIES,
+            )
+            try:
+                expires_at = json.loads(raw).get("lifecycle", {}).get("hardExpiresAt")
+            except (ValueError, AttributeError) as exc:
+                raise SkillError("UPSTREAM_PROTOCOL_ERROR", "Invalid sandbox lifecycle response.") from exc
+            if expires_at is not None and not isinstance(expires_at, str):
+                raise SkillError("UPSTREAM_PROTOCOL_ERROR", "Invalid sandbox lease expiry.")
+            if expires_at:
+                data["expires_at"] = expires_at
+                hint += " Tell the user when the desktop lease expires."
         return {"data": data, "next": {"agent_hint": hint}}
     return {"data": data, "next": {
-        "command": f"{command_prefix()} desktop operation --operation-id {args.operation_id}",
+        "command": _desktop_operation_command(args, args.operation_id, sandbox_id),
         "agent_hint": (
             f"The desktop lifecycle operation is still {status or 'running'}. Keep checking this "
-            "same operation; do not submit another start or shutdown request."
+            "same operation; submitting another request can create a duplicate."
         ),
     }}
 
@@ -2286,6 +2338,14 @@ def _add_semantic_parsers(sub):
     p = desktop.add_parser("list", help="List selectable cloud desktops.")
     p.set_defaults(handler=cmd_desktop_list, action="desktop list")
 
+    p = desktop.add_parser("specs", help="List the desktop specs available to the current account.")
+    p.set_defaults(handler=cmd_desktop_specs, action="desktop specs")
+
+    p = desktop.add_parser("allocate", help="Request a new desktop with a selected spec.")
+    p.add_argument("--spec", required=True, help="Exact spec code from desktop specs.")
+    p.add_argument("--idempotency-key", required=True, help="Stable key to reuse when retrying this allocation.")
+    p.set_defaults(handler=cmd_desktop_allocate, action="desktop allocate")
+
     p = desktop.add_parser("access", help="Get a temporary CUA App login URL.")
     p.add_argument("--desktop", help="Exact owned desktop id; omit to use the selected desktop.")
     p.set_defaults(handler=cmd_desktop_access, action="desktop access")
@@ -2334,8 +2394,9 @@ def _add_semantic_parsers(sub):
     )
     p.set_defaults(handler=cmd_desktop_shutdown, action="desktop shutdown")
 
-    p = desktop.add_parser("operation", help="Check a desktop start or shutdown operation.")
-    p.add_argument("--operation-id", required=True, help="Operation id returned by desktop start or shutdown.")
+    p = desktop.add_parser("operation", help="Check a desktop allocation, start or shutdown operation.")
+    p.add_argument("--operation-id", required=True, help="Operation id returned by a desktop lifecycle command.")
+    p.add_argument("--sandbox-id", help="Sandbox id returned by desktop allocate, for reading the lease expiry.")
     p.set_defaults(handler=cmd_desktop_operation, action="desktop operation")
 
 

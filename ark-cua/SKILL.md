@@ -1,6 +1,6 @@
 ---
 name: ark-cua
-description: Do things on the user's cloud computer (云电脑 / 云桌面 / cloud desktop), the remote desktop of Volcengine AgentPlan CUA (Computer Use Agent) — use apps and websites there, read its screen, run commands, bring files back, and check that it is available. Use this skill whenever the user asks to operate, control or use the cloud computer or CUA, however they phrase it, even when a local tool could do the same; tools that control the user's own computer act on a different machine. It also covers desktop access links, start and shutdown, browser login sync with CookieCloud, credential resources with Credential Agent, and connecting an MCP client so the user's own agent can call desktop tools directly. For a request that names neither the cloud computer nor CUA, prefer local reasoning or purpose-built local/API tools that can complete it directly.
+description: Do things on the user's cloud computer (云电脑 / 云桌面 / cloud desktop), the remote desktop of Volcengine AgentPlan CUA (Computer Use Agent) — use apps and websites there, read its screen, run commands, bring files back, and check that it is available. Use this skill whenever the user asks to operate, control or use the cloud computer or CUA, however they phrase it, even when a local tool could do the same; tools that control the user's own computer act on a different machine. It also covers desktop access links, available desktop specs, allocation by spec, start and shutdown, browser login sync with CookieCloud, credential resources with Credential Agent, and connecting an MCP client so the user's own agent can call desktop tools directly. For a request that names neither the cloud computer nor CUA, prefer local reasoning or purpose-built local/API tools that can complete it directly.
 version: 1.3.2
 license: Apache-2.0
 ---
@@ -21,7 +21,7 @@ Each invocation prints one JSON object:
 - Failure: `ok: false`, with `error.code` and sometimes `next.setup_command`.
 - Either can carry `notices`: one-off messages to relay to the user.
 
-`next.command` and `next.agent_hint` say what to do next. Read [references/commands.md](references/commands.md) for commands beyond the core workflow and before desktop start or shutdown, and [references/credentials.md](references/credentials.md) before login sync or credential resources. [references/auth.md](references/auth.md) and [references/troubleshooting.md](references/troubleshooting.md) cover login and errors.
+`next.command` and `next.agent_hint` say what to do next. Read [references/commands.md](references/commands.md) for commands beyond the core workflow and before desktop allocation, start or shutdown, and [references/credentials.md](references/credentials.md) before login sync or credential resources. [references/auth.md](references/auth.md) and [references/troubleshooting.md](references/troubleshooting.md) cover login and errors.
 
 ## Core workflow
 
@@ -58,6 +58,7 @@ If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. W
 - What the cloud desktop shows now: `desktop screenshot` saves the screen as an image without running a CUA task, to a new temporary file, or to `--output <new-path>` when the user wants the file somewhere. Delegate instead when CUA has to do something first.
 - Local file delivery: CUA cannot write to the user's computer; only files it registered as artifacts can be downloaded. Leave the local-delivery wording out of the objective. When the task completes, use `artifact list` and `artifact save` to a new local path. A file that is not listed has not been registered: ask CUA to export it with `task continue --task-id <id>`, then list again.
 - A specific desktop or a reusable context: use `desktop list`, `task run`, `context` and `task continue`.
+- Available desktop specs: use `desktop specs`. Once the user requests allocation with a specific code, run `desktop allocate --spec <code> --idempotency-key <stable-unique-key>` and follow `next.command` to check the original allocation.
 - CUA App login URL: run `desktop access` and return its fresh `data.full_interface_url`, falling back to `data.access_url`. Do not reuse or rewrite an earlier URL. If opening it fails, see [references/troubleshooting.md](references/troubleshooting.md).
 - Direct desktop control by the user's own agent: when the user wants an agent or MCP client to call the desktop's tools itself rather than have CUA complete an objective, follow [references/mcp.md](references/mcp.md). It covers the endpoint, the key and how an MCP session shares the desktop with tasks.
 - Login, health or configuration: use `auth status`, `ping`, `diagnose` or `model get`; never create a task merely to test availability.
@@ -75,4 +76,4 @@ If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. W
 - Deliver files through registered artifacts and `artifact save` to a new path. Do not substitute base64, share links or HTML/interstitial responses for a downloaded file, or overwrite existing files.
 - Treat temporary desktop URLs and their tickets as secrets. Return a URL when the user's task requires CUA App access, never log it, and revoke it when exposure is suspected.
 - Credential Agent values and pairing codes must stay inside Credential Agent and the encrypted relay. Never put them in objectives, model context, CLI output, logs, files, or chat. Reset only after central revocation of the exact Device ID is confirmed.
-- Do not modify persistent model settings, manage schedules, or invoke desktop reboot/reset operations. Desktop shutdown and start are the supported billing lifecycle actions; both require explicit user intent, and shutdown additionally requires the CLI's `--confirm` flag.
+- Do not modify persistent model settings, manage schedules, or invoke desktop reboot/reset operations. Desktop allocation, start and shutdown require explicit user intent. Shutdown also requires the CLI's `--confirm` flag.

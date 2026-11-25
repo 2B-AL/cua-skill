@@ -26,6 +26,7 @@ import http.client
 import io
 import json
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -92,6 +93,109 @@ class TaskFlowTests(unittest.TestCase):
             cua.main(list(argv))
         self.slept = [call.args[0] for call in sleep.call_args_list]
         return json.loads(out.getvalue())
+
+    def test_desktop_specs_reads_only_the_current_accounts_catalog(self):
+        catalog = {
+            "default_spec_code": "windows-4c8g",
+            "available_specs": [
+                {"spec_code": "windows-4c8g", "os": "Windows", "availability": "available"},
+                {"spec_code": "windows-8c16g", "os": "Windows", "availability": "temporarily_unavailable",
+                 "lease_duration_seconds": 7200, "user_stop_policy": "release"},
+            ],
+        }
+        self.replies = {("GET", "/v1/desktop-specs"): catalog}
+
+        result = self.run_cli("desktop", "specs")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"], catalog)
+        self.assertEqual(self.calls, [("GET", "/v1/desktop-specs", None)])
+
+    def test_desktop_allocate_follows_the_same_operation_and_reads_its_lease(self):
+        operation = "/v1/desktop/operations/op-example"
+        sandbox = "/v1/sandboxes/sbi-example"
+        expires_at = "2026-11-25T12:30:00Z"
+        self.replies = {
+            ("POST", "/v1/desktop-allocations"): {
+                "desktop_id": "desk-example", "sandbox_id": "sbi-example",
+                "operation_id": "op-example", "spec_code": "windows-8c16g",
+            },
+            ("GET", operation): [{"status": "running", "terminal": False},
+                                 {"status": "succeeded", "terminal": True}],
+            ("GET", sandbox): ({}, json.dumps({"lifecycle": {"hardExpiresAt": expires_at}}).encode()),
+        }
+        gateway = ["--api-base-url", "https://gateway.example.test/cua"]
+        follow_up = [*gateway, "desktop", "operation", "--operation-id", "op-example", "--sandbox-id", "sbi-example"]
+
+        with patch.object(cua.cua_auth, "_authorized_raw_call_once", side_effect=self.gateway):
+            allocated = self.run_cli(*gateway, "desktop", "allocate", "--spec", "windows-8c16g",
+                                     "--idempotency-key", "allocate-example")
+            self.assertTrue(allocated["ok"])
+            command = shlex.split(allocated["next"]["command"])[2:]
+            self.assertEqual(command, follow_up)
+            running = self.run_cli(*command)
+            self.assertEqual(shlex.split(running["next"]["command"])[2:], follow_up)
+            ready = self.run_cli(*follow_up)
+
+        self.assertTrue(ready["ok"])
+        self.assertEqual(ready["data"]["expires_at"], expires_at)
+        self.assertEqual(self.calls, [
+            ("POST", "/v1/desktop-allocations", {"spec_code": "windows-8c16g", "idempotency_key": "allocate-example"}),
+            ("GET", operation, None),
+            ("GET", operation, None),
+            ("GET", sandbox, None),
+        ])
+
+    def test_desktop_allocate_reports_a_shortage_without_a_second_request(self):
+        self.replies = {("POST", "/v1/desktop-allocations"): SkillError(
+            "SPEC_TEMPORARILY_UNAVAILABLE", "The selected desktop spec has no capacity.",
+        )}
+
+        result = self.run_cli("desktop", "allocate", "--spec", "windows-8c16g", "--idempotency-key", "allocate-example")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "SPEC_TEMPORARILY_UNAVAILABLE")
+        self.assertEqual(self.calls, [
+            ("POST", "/v1/desktop-allocations", {"spec_code": "windows-8c16g", "idempotency_key": "allocate-example"}),
+        ])
+
+    def test_desktop_allocate_requires_both_ids_to_continue(self):
+        self.replies = {("POST", "/v1/desktop-allocations"): {"operation_id": "op-example"}}
+
+        result = self.run_cli("desktop", "allocate", "--spec", "windows-8c16g", "--idempotency-key", "allocate-example")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "UPSTREAM_PROTOCOL_ERROR")
+
+    def test_desktop_operation_read_skips_lease_for_legacy_or_failed_operations(self):
+        operation = "/v1/desktop/operations/op-example"
+        cases = [([], "succeeded"), (["--sandbox-id", "sbi-example"], "failed")]
+        for options, status in cases:
+            with self.subTest(status=status):
+                self.replies = {("GET", operation): {"status": status, "terminal": True}}
+                with patch.object(cua.cua_auth, "authorized_raw_call") as raw_call:
+                    result = self.run_cli("desktop", "operation", "--operation-id", "op-example", *options)
+                self.assertTrue(result["ok"])
+                self.assertNotIn("expires_at", result["data"])
+                raw_call.assert_not_called()
+
+    def test_desktop_start_and_shutdown_keep_their_existing_routes(self):
+        self.replies = {
+            ("POST", "/v1/desktop/start"): {"operation_id": "op-start"},
+            ("POST", "/v1/desktop/release"): {"operation_id": "op-shutdown"},
+        }
+        started = self.run_cli("desktop", "start", "--idempotency-key", "start-example")
+        stopped = self.run_cli("desktop", "shutdown", "--confirm", "--idempotency-key", "shutdown-example")
+
+        for action, result in (("start", started), ("shutdown", stopped)):
+            self.assertTrue(result["ok"])
+            self.assertEqual(shlex.split(result["next"]["command"])[2:],
+                             ["desktop", "operation", "--operation-id", f"op-{action}"])
+        self.assertEqual(self.calls, [
+            ("POST", "/v1/desktop/start", {"idempotency_key": "start-example"}),
+            ("POST", "/v1/desktop/release", {"idempotency_key": "shutdown-example",
+                                            "confirm": True, "reason": "user_requested_shutdown"}),
+        ])
 
     def test_a_follow_up_goes_to_the_context_of_the_delegated_task(self):
         # An earlier `task run` left its task and context as the latest ones.
