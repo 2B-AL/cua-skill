@@ -26,9 +26,9 @@ python3 <skill-dir>/scripts/cua.py result (--invocation-id <id> | --last) [--tim
 python3 <skill-dir>/scripts/cua.py cancel (--invocation-id <id> | --last)
 ```
 
-`--objective`, `--answer` and `--text` read standard input when given `-`; in a quoted heredoc (`<<'EOF'`) the shell passes the user's words unchanged, quotation marks included. A task id and an invocation id are the same id, so `--task-id` and `--invocation-id` are interchangeable.
+`--objective`, `--answer`, `--message` and `--text` read standard input when given `-`; in a quoted heredoc (`<<'EOF'`) the shell passes the user's words unchanged, quotation marks included. A task id and an invocation id are the same id, so `--task-id` and `--invocation-id` are interchangeable.
 
-Call `delegate` once and follow `next.command` until a terminal outcome. `delegate`, `task run`, `task continue`, `answer` and `task answer` wait up to 20 seconds for a terminal outcome by default, so a short task returns its result at once; `--wait-ms 0` returns the task id immediately. Use `cancel` only on explicit user request.
+Call `delegate` once and follow `next.command` until a terminal outcome. `delegate`, `task run`, `task continue`, `task message`, `answer` and `task answer` wait up to 20 seconds for a terminal outcome by default, so a short task returns its result at once; `--wait-ms 0` returns the task id immediately. Use `cancel` only on explicit user request.
 
 Each delegated task opens a context. A later request that relies on it continues there: `task continue --last-context` for the latest task, or `task continue --task-id <id>` for an earlier one.
 
@@ -77,9 +77,12 @@ python3 <skill-dir>/scripts/cua.py task run [--desktop <id-or-name>] [--title "<
   --objective - <<'EOF'
 <user request>
 EOF
-python3 <skill-dir>/scripts/cua.py task continue (--context-id <id> | --last-context | --task-id <id>) [--wait-ms 20000] \
-  --objective - <<'EOF'
+python3 <skill-dir>/scripts/cua.py task continue (--context-id <id> | --last-context | --task-id <id>) [--parallel] \
+  [--wait-ms 20000] --objective - <<'EOF'
 <user request>
+EOF
+python3 <skill-dir>/scripts/cua.py task message (--task-id <id> | --last) [--wait-ms 20000] --message - <<'EOF'
+<user addition>
 EOF
 python3 <skill-dir>/scripts/cua.py task status (--task-id <id> | --last)
 python3 <skill-dir>/scripts/cua.py task result (--task-id <id> | --last) [--timeout 600]
@@ -97,7 +100,7 @@ python3 <skill-dir>/scripts/cua.py context show (--context-id <id> | --last-cont
 python3 <skill-dir>/scripts/cua.py timeline show (--context-id <id> | --last-context)
 ```
 
-`task run` can target a chosen desktop, and `task continue` adds a request to an existing context. The other `task` commands act on the same ids as the core commands: `task answer`, `task result` and `task cancel` do what `answer`, `result` and `cancel` do, and `task status` reads the current state without waiting. Use the identifiers returned by each command and follow `next.command`.
+`task run` can target a chosen desktop, and `task continue` adds a request to an existing context: queued after the context's current task, or with `--parallel` at the same time as it. `task message` adds the user's words to a running task instead of starting one; SKILL.md says which of these fits a request. The other `task` commands act on the same ids as the core commands: `task answer`, `task result` and `task cancel` do what `answer`, `result` and `cancel` do, and `task status` reads the current state without waiting. Use the identifiers returned by each command and follow `next.command`.
 
 ## Artifacts
 

@@ -222,6 +222,7 @@ def _raise_gateway_error(status, payload):
             "active_task_id",
             "action_required",
             "verification_url",
+            "agent_hint",
         }
         extra = {k: v for k, v in error.items() if k in safe_fields}
         if payload.get("request_id") and not extra.get("request_id"):
