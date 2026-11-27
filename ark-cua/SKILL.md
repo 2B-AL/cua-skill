@@ -49,9 +49,19 @@ Each invocation prints one JSON object:
    - `failed`: report the failure; retry only when the user asks and it is safe.
    - `cancelled`: report the cancellation.
 
-A request that relies on an earlier task goes to that task's context instead of into a rewritten objective: run `task continue --task-id <that task's invocation_id> --objective -` with the request in a heredoc the same way.
+A request that relies on an earlier task that has ended goes to that task's context instead of into a rewritten objective: run `task continue --task-id <that task's invocation_id> --objective -` with the request in a heredoc the same way.
 
-If task creation returns `ACTIVE_RUN_CONFLICT`, the new request did not start. When the holder is this agent's own MCP session on that desktop ([references/mcp.md](references/mcp.md)), end it with `environment_release` and submit the request again. Otherwise stop, tell the user the desktop is busy, and do not retry or inspect the existing task unless the user explicitly asks.
+## Requests while a task runs
+
+A new request can arrive before a task is terminal. Choose by how it relates to that task:
+
+- It changes or extends what that task delivers, such as a correction, a detail to add or a next step on its result: `task message --task-id <id> --message -`, with the user's words, unchanged, in a heredoc. They join that task, which reports one result for all of it. A task that has not started cannot take them (`TASK_NOT_STARTED`): cancel it, then send its request and the addition together as one task.
+- It is a separate piece of the same job and needs nothing from that task, such as one more thing to look up for it: `task continue --task-id <id> --parallel`. It runs at the same time and reports its own result.
+- It is unrelated: `delegate`. It opens a context of its own and is queued until the desktop is free.
+
+A queued task shows `data.progress.state: queued`, and `data.progress.summary` says what it waits for. It starts by itself, even after you stop watching it: never submit it again, and cancel it if the user no longer wants it. If it waits for your own MCP session ([references/mcp.md](references/mcp.md)), release that session with `environment_release`.
+
+With several tasks open, follow each one until it is terminal and relay each question and result. Name the task with `--task-id` in every command you write; `--last` means only the latest one.
 
 ## Route special intents
 

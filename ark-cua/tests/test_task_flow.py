@@ -14,10 +14,11 @@
 
 """The commands an agent runs for tasks, end to end against a fake gateway.
 
-A follow-up continues the context of the delegated task, the user's words
-reach the gateway unchanged, a task id and an invocation id name the same
-task, a call lost to a dropped connection is retried, and a task that lost
-model authorization is resumed by sending its creation request again.
+A follow-up continues the context of the delegated task and runs at the same
+time as that task only when asked, a message goes to the running task, the
+user's words reach the gateway unchanged, a task id and an invocation id name
+the same task, a call lost to a dropped connection is retried, and a task that
+lost model authorization is resumed by sending its creation request again.
 """
 
 import base64
@@ -289,6 +290,79 @@ class TaskFlowTests(unittest.TestCase):
         self.assertEqual(reply["data"]["invocation_id"], "task_2")
         self.assertEqual([call[:2] for call in self.calls],
                          [("GET", "/v1/tasks/task_1"), ("POST", "/v1/contexts/ctx_1/tasks")])
+
+    def test_a_follow_up_runs_at_the_same_time_only_when_asked(self):
+        self.replies = {("GET", "/v1/tasks/task_1"): task("task_1", "ctx_1", outcome="in_progress"),
+                        ("POST", "/v1/contexts/ctx_1/tasks"): [task("task_2", "ctx_1"), task("task_3", "ctx_1")]}
+        self.run_cli("task", "continue", "--task-id", "task_1", "--objective", "查完以后把结果发给我")
+        self.run_cli("task", "continue", "--task-id", "task_1", "--parallel", "--objective", "同时在知乎也搜一下")
+        after, alongside = self.calls[1][2], self.calls[3][2]
+        self.assertNotIn("parallel", after)
+        self.assertIs(alongside["parallel"], True)
+        self.assertEqual(alongside["objective"], "同时在知乎也搜一下")
+
+    def test_a_queued_task_says_what_it_waits_for(self):
+        queued = task("task_2", "ctx_1", outcome="in_progress",
+                      progress={"state": "queued", "step_count": 0, "updated_at": "2026-11-27T08:00:00Z",
+                                "summary": "The task is queued and starts after the current task in this context."},
+                      next_action={"agent_hint": "Do not submit it again: it starts by itself."})
+        self.replies = {("POST", "/v1/contexts/ctx_1/tasks"): queued}
+        reply = self.run_cli("task", "continue", "--context-id", "ctx_1", "--wait-ms", "0", "--objective", "再查一下")
+        self.assertEqual(reply["data"]["progress"], {
+            "state": "queued", "step_count": 0,
+            "summary": "The task is queued and starts after the current task in this context."})
+        self.assertEqual(reply["next"]["agent_hint"], "Do not submit it again: it starts by itself.")
+        self.assertIn("watch --invocation-id task_2", reply["next"]["command"])
+
+    def test_a_message_reaches_the_running_task_unchanged(self):
+        words = "顺便把“价格”那一列也记下来"
+        running = task("task_1", "ctx_1", outcome="in_progress", progress={"state": "running", "step_count": 3})
+        self.replies = {("POST", "/v1/tasks/task_1/messages"): running,
+                        ("POST", "/v1/invocations/task_1/watch"): running}
+        reply = self.run_cli("task", "message", "--task-id", "task_1", "--message", "-", stdin=words + "\n")
+        method, path, body = self.calls[0]
+        self.assertEqual((method, path), ("POST", "/v1/tasks/task_1/messages"))
+        self.assertEqual((body["message"], body["wait_ms"]), (words, 0))
+        self.assertTrue(body["idempotency_key"].startswith("ark-cua-"))
+        self.assertEqual(reply["data"]["progress"], {"step_count": 3})
+        self.assertIn("watch --invocation-id task_1", reply["next"]["command"])
+
+    def test_a_lost_message_response_is_retried_under_the_same_key(self):
+        self.replies = {("POST", "/v1/tasks/task_1/messages"): [
+            SkillError("NETWORK", "The connection dropped."), task("task_1", "ctx_1")]}
+        self.assertTrue(self.run_cli("task", "message", "--task-id", "task_1", "--message", "改成下周")["ok"])
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[0][2], self.calls[1][2])
+
+    def test_a_refused_message_comes_with_the_gateways_advice(self):
+        hint = "The task has not started yet. To change it, cancel it and send it again with the addition."
+        with self.assertRaises(SkillError) as refused:
+            cua_http._raise_gateway_error(409, {"error": {
+                "code": "TASK_NOT_STARTED", "message": "the task has not started or resumed yet", "agent_hint": hint}})
+        self.replies = {("POST", "/v1/tasks/task_2/messages"): refused.exception}
+        reply = self.run_cli("task", "message", "--task-id", "task_2", "--message", "改成下周")
+        self.assertEqual(reply["error"]["code"], "TASK_NOT_STARTED")
+        self.assertNotIn("agent_hint", reply["error"])
+        self.assertEqual(reply["next"], {"agent_hint": hint})
+
+    def test_a_busy_desktop_keeps_this_clis_advice(self):
+        with self.assertRaises(SkillError) as refused:
+            cua_http._raise_gateway_error(409, {"error": {"code": "ACTIVE_RUN_CONFLICT", "agent_hint": "Try again later."}})
+        self.replies = {("POST", "/v1/tasks"): refused.exception}
+        reply = self.run_cli("delegate", "--objective", "打开记事本")
+        self.assertNotIn("agent_hint", reply["error"])
+        self.assertIn("environment_release", reply["next"]["agent_hint"])
+        self.assertNotIn("Try again later.", reply["next"]["agent_hint"])
+
+    def test_a_gateway_without_task_messages_says_so(self):
+        for response in ({}, {"error": {"code": "DataRouteNotRegistered"}}):
+            with self.subTest(response=response):
+                with self.assertRaises(SkillError) as missing:
+                    cua_http._raise_gateway_error(404, response)
+                self.replies = {("POST", "/v1/tasks/task_1/messages"): missing.exception}
+                reply = self.run_cli("task", "message", "--task-id", "task_1", "--message", "改成下周")
+                self.assertEqual(reply["error"]["code"], "TASK_MESSAGE_UNSUPPORTED")
+                self.assertIn("task continue --task-id", reply["error"]["message"])
 
     def test_an_unfinished_follow_up_is_watched_rather_than_polled(self):
         # task status answers at once, so following it would cost a turn every few seconds.

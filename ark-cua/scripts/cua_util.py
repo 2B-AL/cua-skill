@@ -100,7 +100,9 @@ def emit_error(action, error):
     if body.get("code") == "NETWORK" and _GATEWAY:
         body["gateway"] = dict(_GATEWAY)
     payload = {"ok": False, "action": action, "error": body}
-    next_hint = _next_for_error(body)
+    # The gateway's advice for its own code, unless this CLI has its own.
+    gateway_hint = body.pop("agent_hint", None)
+    next_hint = _next_for_error(body) or ({"agent_hint": gateway_hint} if gateway_hint else None)
     if next_hint:
         payload["next"] = next_hint
     _print(payload)
@@ -111,10 +113,10 @@ def _next_for_error(body):
     code = body.get("code")
     if _is_active_run_conflict(body):
         return {
-            "agent_hint": "The new CUA task was not started because the cloud desktop already has an active task/run. "
-            "Stop here for this user request: do not retry, do not call delegate/task run/task continue again, "
-            "and do not probe with diagnose/watch --last unless the user explicitly asks to inspect or cancel "
-            "the existing task. Tell the user to wait until the current desktop task finishes, then try again.",
+            "agent_hint": "This request was not carried out because the cloud desktop is busy with other work. "
+            "If that work is your own MCP session, release it with environment_release and run the request again. "
+            "Otherwise stop: tell the user the desktop is busy; do not retry, and do not inspect or cancel "
+            "the other work unless the user asks.",
         }
     setup = body.get("setup_command")
     if code in ("AUTH_REQUIRED", "REFRESH_FAILED", "TOKEN_EXPIRED") and setup:

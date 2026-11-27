@@ -211,12 +211,12 @@ def main(argv=None):
 
 
 def _read_stdin_text(args):
-    """Replace an --objective, --answer or --text of - with standard input.
+    """Replace an --objective, --answer, --message or --text of - with standard input.
 
     A quoted heredoc (<<'EOF') passes the user's words through the shell
     unchanged, whatever quotation marks they contain.
     """
-    for attr in ("objective", "answer", "text"):
+    for attr in ("objective", "answer", "message", "text"):
         if getattr(args, attr, None) != "-":
             continue
         flag = "--" + attr
@@ -699,9 +699,38 @@ def cmd_task_continue(args, state, session):
     else:
         context_id = _resolve_context_id(args, session)
     body = {"objective": args.objective, "wait_ms": 0}
+    if args.parallel:
+        body["parallel"] = True
     envelope = _create_task(state, base_url, f"/v1/contexts/{context_id}/tasks", body, session)
     envelope = _wait_after_submit(state, base_url, envelope.get("invocation_id"), args.wait_ms, session, envelope)
     return _task_result("task continue", envelope, session)
+
+
+def cmd_task_message(args, state, session):
+    """Add the user's words to a running task; they become no task of their own.
+
+    The key lets a retry after a lost response deliver the message once.
+    """
+    base_url = resolve_base_url(args, state)
+    _validate_wait_ms(args.wait_ms)
+    task_id = _resolve_task_id(args, session)
+    body = {"message": args.message, "wait_ms": 0, "idempotency_key": "ark-cua-" + secrets.token_hex(16)}
+    try:
+        envelope = cua_auth.authorized_call(
+            state, base_url, "POST", f"/v1/tasks/{task_id}/messages",
+            body=body, timeout=_call_timeout(0), retries=IDEMPOTENT_RETRIES,
+        )
+    except SkillError as exc:
+        if exc.http_status == 404 or exc.code == "DataRouteNotRegistered":
+            raise SkillError(
+                "TASK_MESSAGE_UNSUPPORTED",
+                "This gateway cannot add a message to a running task. "
+                "Send the addition with task continue --task-id once the task has ended.",
+                **exc.extra,
+            ) from exc
+        raise
+    envelope = _wait_after_submit(state, base_url, task_id, args.wait_ms, session, envelope)
+    return _task_result("task message", envelope, session)
 
 
 def cmd_task_status(args, state, session):
@@ -2155,7 +2184,8 @@ def _model_authorization_next(next_hint, envelope, session):
 
 # Gateway bookkeeping the calling agent does not act on, re-read on every later
 # turn otherwise: the request id stays at the top level, the hint goes once into
-# `next`, and the progress summary is fixed wording.
+# `next`, and the progress summary is fixed wording except for a queued task,
+# whose summary says what it waits for.
 _ENVELOPE_BOOKKEEPING = ("diagnostics", "model_selection", "next_action")
 _PLATFORM_FIELDS = ("desktop", "run_id", "context_id", "trace_id", "security_advisory")
 
@@ -2176,9 +2206,11 @@ def _compact_envelope(envelope):
             else:
                 data.pop(key)
     progress = data.pop("progress", None)
-    step_count = progress.get("step_count") if isinstance(progress, dict) else None
-    if data.get("outcome") == "in_progress" and step_count is not None:
-        data["progress"] = {"step_count": step_count}
+    if data.get("outcome") == "in_progress" and isinstance(progress, dict):
+        keep = ("state", "summary", "step_count") if progress.get("state") == "queued" else ("step_count",)
+        progress = {k: progress[k] for k in keep if not _empty(progress.get(k))}
+        if progress:
+            data["progress"] = progress
     request_id = (envelope.get("diagnostics") or {}).get("request_id")
     if request_id and not data.get("request_id"):
         data["request_id"] = request_id
@@ -2447,12 +2479,25 @@ def _add_semantic_parsers(sub):
     p.add_argument("--last-context", action="store_true", help="Use the most recent context id.")
     p.add_argument("--task-id", "--invocation-id", dest="task_id",
                    help="An earlier task; the request continues in that task's context.")
+    p.add_argument("--parallel", action="store_true",
+                   help="Run at the same time as the context's current task instead of after it. "
+                        "Only for work that needs nothing from that task.")
     p.add_argument(
         "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
         help="Total ms to wait for a terminal outcome before returning; calls are chunked at 60 seconds. "
              "0 returns the task id at once.",
     )
     p.set_defaults(handler=cmd_task_continue, action="task continue")
+
+    p = task.add_parser("message", help="Add the user's words to a running task.")
+    _add_task_args(p)
+    p.add_argument("--message", required=True,
+                   help="The user's addition, unchanged. Pass - to read it from standard input.")
+    p.add_argument(
+        "--wait-ms", type=int, default=DEFAULT_WATCH_WAIT_MS,
+        help="Total ms to wait for a terminal outcome before returning; calls are chunked at 60 seconds.",
+    )
+    p.set_defaults(handler=cmd_task_message, action="task message")
 
     p = task.add_parser("status", help="Check a task's current state.")
     _add_task_args(p)
